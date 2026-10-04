@@ -52,9 +52,18 @@ identifier in that case, so provider migrations require review before writes.
 Private settings/receipts use `AtomicStore` under Application Support. Settings UUID
 is persisted before provider activity. Old v1 settings default to 7 days back/90 ahead;
 controls permit 0–365 back and 1–365 ahead. Ownership receipts contain only installation,
-private target identity, row ID and opaque expected marker. Known rows with stripped or
-changed markers make the whole calendar read uncertain and never become source/export
-originals. Pending creates are persisted before writes; exact returned markers recover
+private target identity, row ID and opaque expected marker. Known row IDs are checked
+across every prior target receipt, so a known row moved into
+another selected calendar (including stripped/replaced notes) makes that calendar read
+uncertain and never becomes a source/export original. Provider moves or full resyncs
+may change local row IDs. If a provider both replaces a row ID and strips all ownership
+notes, EventKit supplies no guaranteed identity to correlate that row; this journal
+cannot prove its provenance. No title/time guess is used as a substitute. An unchanged
+valid marker still excludes the row even when its local ID changes. Managed availability
+is preserved into reconciliation: only confirmed Busy blocks satisfy desired coverage;
+Free/unknown owned blocks require repair after complete reads. Create replay accepts
+only a matching Busy row. Pending creates are persisted before writes; exact returned
+markers recover
 commit-before-error. An unresolved pending create quarantines its target until its exact
 marker is observed or a separately reviewed recovery resolves the uncertainty. There is
 no automatic repair by title/time, and no manual receipt-reset tool in this stage.

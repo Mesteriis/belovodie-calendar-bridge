@@ -36,9 +36,15 @@ import BridgeCore
     func observe(_ rows: [ProviderEvent], target: String) throws {
         // A known row is uncertain if its provider removes/changes ownership. Keep it out of
         // source/export reads and never authorize repair by title or time alone.
-        for receipt in state.receipts where receipt.target == target {
-            if let row = rows.first(where: { $0.id == receipt.rowID }),
-               Ownership.decode(row.event.ownershipMarker) != Ownership.decode(receipt.marker) { throw EventKitAdapterError.invalidOwnership }
+        for row in rows {
+            // Provider-local row IDs are store-wide evidence. A known row moved into a different
+            // calendar remains uncertain even if its notes were stripped or replaced on that move.
+            for receipt in state.receipts where receipt.rowID == row.id {
+                guard receipt.target == target,
+                      Ownership.decode(row.event.ownershipMarker) == Ownership.decode(receipt.marker) else {
+                    throw EventKitAdapterError.invalidOwnership
+                }
+            }
         }
         var updated = state
         for row in rows where Self.valid(row.event.ownershipMarker, target: target, installationID: state.installationID) {

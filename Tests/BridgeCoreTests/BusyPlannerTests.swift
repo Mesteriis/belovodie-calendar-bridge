@@ -36,7 +36,7 @@ final class BusyPlannerTests: XCTestCase {
 
     func stored(_ desired: DesiredBlock, id: String = "managed") -> ManagedBlock {
         ManagedBlock(id: id, sourceID: desired.sourceID, calendarID: desired.calendarID,
-                     title: desired.title, interval: desired.interval, isAllDay: desired.isAllDay,
+                     title: desired.title, interval: desired.interval, isAllDay: desired.isAllDay, availability: .busy,
                      ownershipMarker: desired.ownershipMarker)
     }
 
@@ -152,7 +152,7 @@ final class BusyPlannerTests: XCTestCase {
         XCTAssertEqual(decoded.installationID, installation)
         XCTAssertEqual(decoded.linkID.count, 64)
         let managed = ManagedBlock(id: "normalized", sourceID: "account", calendarID: "b", title: "Занято",
-                                   interval: result.interval, isAllDay: false, ownershipMarker: normalized)
+                                   interval: result.interval, isAllDay: false, availability: .busy, ownershipMarker: normalized)
         let rerun = try plan([event("secret-event", calendar: "private-calendar", source: "private-account")],
                              policies: [policy("private-calendar", source: "private-account", busySource: true), policy("b", target: true)],
                              existing: [managed])
@@ -314,4 +314,20 @@ final class BusyPlannerTests: XCTestCase {
         XCTAssertThrowsError(try plan([event("invalid", start: 200, end: 100)]))
         XCTAssertThrowsError(try plan([], policies: [policy("a"), policy("a", target: true)]))
     }
+    func testBoundaryFreeOwnedBlockDoesNotSuppressBusyCoverageInsideWindow() throws {
+        let desired = try XCTUnwrap(plan([event("stable")]).creates.first)
+        let protected = ManagedBlock(id: "protected-free", sourceID: desired.sourceID, calendarID: desired.calendarID, title: "Занято", interval: EventInterval(start: Date(timeIntervalSince1970: -100), end: Date(timeIntervalSince1970: 300)), availability: .free, ownershipMarker: desired.ownershipMarker)
+        let result = try plan([event("stable")], existing: [protected])
+        XCTAssertEqual(result.creates.count, 1)
+        XCTAssertTrue(result.updates.isEmpty); XCTAssertTrue(result.deletes.isEmpty)
+    }
+    func testLegacyManagedEncodingDefaultsToUnknownAndRequiresBusyRepair() throws {
+        let desired = try XCTUnwrap(plan([event("stable")]).creates.first)
+        var values = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(stored(desired))) as? [String: Any])
+        values.removeValue(forKey: "availability")
+        let legacy = try JSONDecoder().decode(ManagedBlock.self, from: JSONSerialization.data(withJSONObject: values))
+        XCTAssertEqual(legacy.availability, .unknown)
+        XCTAssertEqual(try plan([event("stable")], existing: [legacy]).updates.count, 1)
+    }
+
 }

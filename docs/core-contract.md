@@ -146,3 +146,9 @@ files default to 7/90. Bounds are 0–365 back and 1–365 ahead. Invalid values
 rejected without replacing existing settings. `BridgeModel.settings` is a UI draft;
 `activeSettings` changes only after a matching count-only preview and successful
 atomic save. Native event writes remain inaccessible from the foreground UI.
+
+Managed blocks carry observed `availability`; missing legacy values decode as unknown.
+Only Busy availability satisfies the desired block or protected boundary coverage;
+other values require a Busy update after complete reads, or remain untouched outside
+the window while an uncovered in-window Busy block is proposed. Adapters must pass
+observed availability and require Busy when accepting a repeated create.

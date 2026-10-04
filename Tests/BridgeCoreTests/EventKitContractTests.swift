@@ -168,6 +168,51 @@ import XCTest
         XCTAssertEqual(fake.writes, 0)
     }
 
+    func testOwnedBlockChangedToFreeIsReconciledBackToBusy() throws {
+        let (fake, adapter, createPlan) = try fixture()
+        try adapter.authorizeReviewedPlan(createPlan); try adapter.apply(createPlan)
+        let owned = try XCTUnwrap(fake.rows.last)
+        fake.rows[fake.rows.count - 1] = ProviderEvent(id: owned.id, event: SourceEvent(sourceID: owned.event.sourceID, calendarID: owned.event.calendarID, eventID: owned.event.eventID, title: owned.event.title, interval: owned.event.interval, isAllDay: owned.event.isAllDay, availability: .free, ownershipMarker: owned.event.ownershipMarker))
+        let policies = [policy("source", source: true), policy("target", target: true)]
+        let reads = try policies.map { try adapter.read(policy: $0, window: window) }
+        let repair = try BusyPlanner(installationID: installation).plan(events: reads.flatMap(\.events), policies: policies, existing: reads.flatMap(\.blocks), window: window, completeSources: Set(reads.filter(\.complete).map { $0.descriptor.identity }))
+        XCTAssertEqual(repair.updates.count, 1)
+        try adapter.authorizeReviewedPlan(repair); try adapter.apply(repair)
+        XCTAssertEqual(fake.rows.last?.event.availability, .busy)
+        XCTAssertEqual(fake.writes, 2)
+    }
+    func testCreateReplayNeverAcceptsMatchingFreeBlock() throws {
+        let (fake, adapter, createPlan) = try fixture()
+        try adapter.authorizeReviewedPlan(createPlan); try adapter.apply(createPlan)
+        let owned = try XCTUnwrap(fake.rows.last)
+        fake.rows[fake.rows.count - 1] = ProviderEvent(id: owned.id, event: SourceEvent(sourceID: owned.event.sourceID, calendarID: owned.event.calendarID, eventID: owned.event.eventID, title: owned.event.title, interval: owned.event.interval, availability: .free, ownershipMarker: owned.event.ownershipMarker))
+        try adapter.authorizeReviewedPlan(createPlan)
+        XCTAssertThrowsError(try adapter.apply(createPlan))
+        XCTAssertEqual(fake.rows.last?.event.availability, .free)
+        XCTAssertEqual(fake.writes, 1)
+    }
+    func testDurableKnownIDMovedAndStrippedFailsOtherCalendarRead() throws {
+        let (fake, adapter, createPlan) = try fixture()
+        try adapter.authorizeReviewedPlan(createPlan); try adapter.apply(createPlan)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("moved-receipt-test-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let first = EventKitAdapter(provider: fake, installationID: installation, receipts: try OwnershipReceiptStore(directoryURL: directory, installationID: installation))
+        XCTAssertTrue(try first.read(policy: policy("target"), window: window).complete)
+        let owned = try XCTUnwrap(fake.rows.last)
+        fake.inventory.append(providerCalendar("other"))
+        fake.rows[fake.rows.count - 1] = ProviderEvent(id: owned.id, event: SourceEvent(sourceID: "account", calendarID: "other", eventID: owned.event.eventID, title: "Занято", interval: owned.event.interval))
+        let restarted = EventKitAdapter(provider: fake, installationID: installation, receipts: try OwnershipReceiptStore(directoryURL: directory, installationID: installation))
+        let other = CalendarPolicy(sourceID: "account", calendarID: "other", owner: "Owner", label: "Other", exportToHA: true, busySource: true)
+        let read = try restarted.read(policy: other, window: window)
+        XCTAssertEqual(read.descriptor.localRead, .failed)
+        XCTAssertTrue(read.events.isEmpty); XCTAssertTrue(read.blocks.isEmpty)
+        let snapshot = try SnapshotBuilder(installationID: installation).build(events: read.events, policies: [other], inventory: [read.descriptor], window: window, observedAt: Date())
+        XCTAssertNil(snapshot.calendars.first?.events)
+        let propagation = try BusyPlanner(installationID: installation).plan(events: read.events, policies: [other, policy("source", target: true)], existing: [], window: window, completeSources: [policy("source").identity])
+        XCTAssertTrue(propagation.creates.isEmpty); XCTAssertTrue(propagation.cleanupSuppressed)
+        XCTAssertEqual(fake.writes, 1)
+    }
+
 }
 @MainActor final class FakeCalendarProvider: CalendarProvider {
     var access: CalendarAccess = .fullAccess

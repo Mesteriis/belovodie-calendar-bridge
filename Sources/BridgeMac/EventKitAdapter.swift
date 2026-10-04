@@ -21,7 +21,7 @@ public struct ProviderEvent: Equatable {
     }
     public var block: ManagedBlock {
         ManagedBlock(id: id, sourceID: event.sourceID, calendarID: event.calendarID, title: event.title,
-                     interval: event.interval, isAllDay: event.isAllDay, ownershipMarker: event.ownershipMarker)
+                     interval: event.interval, isAllDay: event.isAllDay, availability: event.availability, ownershipMarker: event.ownershipMarker)
     }
 }
 @MainActor public protocol CalendarProvider: AnyObject {
@@ -137,7 +137,7 @@ public struct SourceReadResult {
             if !matches.isEmpty {
                 guard matches.count == 1, matches[0].safeToModify, Ownership.decode(matches[0].event.ownershipMarker) == marker,
                       matches[0].event.title == "Занято", matches[0].event.interval == block.interval,
-                      matches[0].event.isAllDay == block.isAllDay else { throw EventKitAdapterError.stalePlan }
+                      matches[0].event.isAllDay == block.isAllDay, matches[0].event.availability == .busy else { throw EventKitAdapterError.stalePlan }
                 continue
             }
             try receipts.beginCreate(block)

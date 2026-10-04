@@ -66,7 +66,7 @@ public struct BusyPlanner: Sendable {
                 let sameLink = owned.indices.filter { owned[$0].marker.linkID == marker.linkID }
                 let protected = sameLink.filter { !Self.contained(owned[$0].block.interval, in: window) }
                 var uncovered = [plannedBlock.interval]
-                for index in protected {
+                for index in protected where owned[index].block.availability == .busy {
                     let interval = owned[index].block.interval
                     if Self.valid(start: interval.start, end: interval.end) {
                         uncovered = uncovered.flatMap { Self.subtract(interval, from: $0) }
@@ -162,6 +162,7 @@ public struct BusyPlanner: Sendable {
 
     private static func matches(_ existing: ManagedBlock, _ desired: DesiredBlock) -> Bool {
         existing.title == desired.title && existing.interval == desired.interval && existing.isAllDay == desired.isAllDay
+            && existing.availability == .busy
             && Ownership.decode(existing.ownershipMarker) == Ownership.decode(desired.ownershipMarker)
     }
 

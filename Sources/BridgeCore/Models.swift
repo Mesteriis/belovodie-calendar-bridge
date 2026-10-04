@@ -109,19 +109,33 @@ public struct ManagedBlock: Codable, Equatable, Sendable {
     public let title: String
     public let interval: EventInterval
     public let isAllDay: Bool
+    public let availability: EventAvailability
     public let ownershipMarker: String?
 
     public init(id: String, sourceID: String, calendarID: String, title: String,
-                interval: EventInterval, isAllDay: Bool = false, ownershipMarker: String?) {
+                interval: EventInterval, isAllDay: Bool = false, availability: EventAvailability = .unknown, ownershipMarker: String?) {
         self.id = id
         self.sourceID = sourceID
         self.calendarID = calendarID
         self.title = title
         self.interval = interval
         self.isAllDay = isAllDay
+        self.availability = availability
         self.ownershipMarker = ownershipMarker
     }
 
+    private enum CodingKeys: String, CodingKey { case id, sourceID, calendarID, title, interval, isAllDay, availability, ownershipMarker }
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        sourceID = try values.decode(String.self, forKey: .sourceID)
+        calendarID = try values.decode(String.self, forKey: .calendarID)
+        title = try values.decode(String.self, forKey: .title)
+        interval = try values.decode(EventInterval.self, forKey: .interval)
+        isAllDay = try values.decode(Bool.self, forKey: .isAllDay)
+        availability = try values.decodeIfPresent(EventAvailability.self, forKey: .availability) ?? .unknown
+        ownershipMarker = try values.decodeIfPresent(String.self, forKey: .ownershipMarker)
+    }
     public var calendarIdentity: String { CalendarPolicy.identity(sourceID: sourceID, calendarID: calendarID) }
 }
 
