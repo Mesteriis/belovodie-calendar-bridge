@@ -105,3 +105,31 @@ def test_ownership_marker_is_not_an_original_title():
         validate_snapshot(data)
     data["calendars"][0]["events"][0]["title"] = "Занято"
     assert validate_snapshot(data).calendars[0].events[0].title == "Занято"
+
+
+@pytest.mark.parametrize(
+    "offset", ["+01:60", "+01:99", "-01:60", "-01:99", "+24:00", "-24:00", "+99:00", "-99:00"]
+)
+def test_invalid_timezone_offset_components_are_rejected(offset):
+    data = payload()
+    data["calendars"][0]["events"][0].update(
+        start=f"2026-03-29T12:00:00.000{offset}",
+        end=f"2026-03-29T13:00:00.000{offset}",
+    )
+    with pytest.raises(ValueError):
+        validate_snapshot(data)
+
+
+@pytest.mark.parametrize(
+    ("offset", "seconds"),
+    [("Z", 0), ("+00:00", 0), ("-00:00", 0), ("+23:59", 86340), ("-23:59", -86340)],
+)
+def test_valid_timezone_offset_boundaries_are_preserved(offset, seconds):
+    data = payload()
+    data["calendars"][0]["events"][0].update(
+        start=f"2026-03-29T12:00:00.000{offset}",
+        end=f"2026-03-29T13:00:00.000{offset}",
+    )
+    event = validate_snapshot(data).calendars[0].events[0]
+    assert event.start.utcoffset().total_seconds() == seconds
+    assert event.end.utcoffset().total_seconds() == seconds

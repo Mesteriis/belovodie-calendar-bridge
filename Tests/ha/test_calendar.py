@@ -406,3 +406,27 @@ async def test_concurrent_inventory_changes_cannot_remove_newer_entity(hass):
     entity_id = er.async_get(hass).async_get_entity_id("calendar", "belovodie_calendar_bridge", A)
     assert entity_id is not None
     assert hass.states.get(entity_id).state != "unavailable"
+
+
+@native
+async def test_invalid_timezone_offsets_never_replace_persisted_cache(hass):
+    from pathlib import Path
+
+    store = SnapshotStore(hass)
+    await store.async_publish(payload())
+    original = store.calendars[A]
+    path = Path(hass.config.path(".storage", "belovodie_calendar_bridge"))
+    stored = path.read_bytes()
+    for offset in ("+01:99", "-01:99", "+24:00", "-24:00"):
+        invalid = payload("2026-03-29T10:05:00.000Z")
+        invalid["calendars"][0]["events"][0].update(
+            start=f"2026-03-29T12:00:00.000{offset}",
+            end=f"2026-03-29T13:00:00.000{offset}",
+        )
+        with pytest.raises(ValueError):
+            await store.async_publish(invalid)
+        assert store.calendars[A] == original
+        assert path.read_bytes() == stored
+    reopened = SnapshotStore(hass)
+    await reopened.async_load()
+    assert reopened.calendars[A] == original

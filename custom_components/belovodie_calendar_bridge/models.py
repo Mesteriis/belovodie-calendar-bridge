@@ -7,7 +7,10 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
-_INSTANT = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+(?:Z|[+-]\d{2}:\d{2})\Z")
+# fromisoformat normalizes overflowing offset minutes; reject them on the wire.
+_INSTANT = re.compile(
+    r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+(?:Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])\Z"
+)
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}\Z")
 
 
