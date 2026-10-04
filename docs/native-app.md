@@ -46,9 +46,16 @@ The SDK `EventKit.framework/Headers/EKEvent.h` documents all-day/floating
 [`startDate`](https://developer.apple.com/documentation/eventkit/ekevent/startdate)
 and `occurrenceDate` values in the default timezone. Conversion therefore selects
 `NSTimeZone.default` for all-day export and recurrence date anchors even if
-`EKEvent.timeZone` names a different zone. Start/end instants are preserved exactly;
-no midnight rounding or fabricated boundaries are applied. Strict snapshot
-midnight validation remains unchanged. Timed events preserve the explicit provider
+`EKEvent.timeZone` names a different zone. Native macOS evidence also confirmed
+all-day ends represented as the last whole second before midnight. The read
+conversion maps only that exact shape to the following exclusive midnight, and
+only when the start is exact midnight in the default zone. Start values, timed
+ends and already-exclusive all-day ends are preserved. Arbitrary nonmidnight or
+subsecond ends are retained and still fail strict all-day snapshot validation.
+This canonicalizes the derived half-open interval without modifying provider
+originals; it never invents a fixed 24-hour day. Managed rows use the same conversion
+so pending receipts and exact replay compare canonical exclusive bounds.
+Strict snapshot midnight validation remains unchanged. Timed events preserve the explicit provider
 timezone where present, with the existing `TimeZone.current` fallback. Original
 recurrence identity uses the external series identifier
 (local item identifier fallback) and original `occurrenceDate`, including moved

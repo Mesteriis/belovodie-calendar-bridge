@@ -2,13 +2,26 @@ import Foundation
 import EventKit
 import BridgeCore
 
-/// Pure conversion of EventKit's already-resolved dates; never moves or rounds provider instants.
+/// Pure read conversion to the core's half-open intervals; never mutates provider events.
 struct NativeEventReadDates {
     let interval: EventInterval
     let timeZoneID: String
     let occurrenceID: String?
     init(start: Date, end: Date, isAllDay: Bool, nativeTimeZone: TimeZone?, occurrenceDate: Date?, systemTimeZone: TimeZone) {
-        interval = EventInterval(start: start, end: end)
+        var exclusiveEnd = end
+        // Confirmed macOS representation: an all-day end can be the last whole second
+        // before exclusive midnight. Normalize only that exact shape with a midnight start.
+        // Already-exclusive, arbitrary, subsecond and timed ends retain their original value.
+        if isAllDay, start.timeIntervalSinceReferenceDate.isFinite, end.timeIntervalSinceReferenceDate.isFinite,
+           end.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1) == 0 {
+            var calendar = Calendar(identifier: .gregorian); calendar.timeZone = systemTimeZone
+            let nextMidnight = end.addingTimeInterval(1)
+            if calendar.startOfDay(for: start) == start, nextMidnight > start,
+               calendar.startOfDay(for: nextMidnight) == nextMidnight {
+                exclusiveEnd = nextMidnight
+            }
+        }
+        interval = EventInterval(start: start, end: exclusiveEnd)
         // EKEvent.h: floating/all-day startDate and occurrenceDate use defaultTimeZone,
         // even if the event carries another explicit zone. Timed events retain that zone.
         timeZoneID = (isAllDay ? systemTimeZone : (nativeTimeZone ?? systemTimeZone)).identifier
@@ -72,9 +85,10 @@ struct NativeEventReadDates {
               let identifier = event.eventIdentifier, !identifier.isEmpty else { throw EventKitAdapterError.incompleteRead }
         let recurring = event.hasRecurrenceRules || event.isDetached
         guard !recurring || event.occurrenceDate != nil else { throw EventKitAdapterError.incompleteRead }
+        let systemTimeZone = event.isAllDay ? NSTimeZone.default : TimeZone.current
         let dates = NativeEventReadDates(start: start, end: end, isAllDay: event.isAllDay,
             nativeTimeZone: event.timeZone, occurrenceDate: recurring ? event.occurrenceDate : nil,
-            systemTimeZone: event.isAllDay ? NSTimeZone.default : TimeZone.current)
+            systemTimeZone: systemTimeZone)
         let occurrence = dates.occurrenceID
         let currentParticipant = event.attendees?.first { $0.isCurrentUser }
         let participation: ParticipationStatus

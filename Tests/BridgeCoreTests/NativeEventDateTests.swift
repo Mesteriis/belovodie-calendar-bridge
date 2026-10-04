@@ -4,7 +4,7 @@ import XCTest
 @testable import BridgeMac
 
 /// Exercises the exact date conversion consumed by NativeEventKitProvider without an EKEventStore.
-final class NativeEventDateTests: XCTestCase {
+@MainActor final class NativeEventDateTests: XCTestCase {
     private func instant(_ value: String) throws -> Date {
         try XCTUnwrap(ISO8601DateFormatter().date(from: value))
     }
@@ -50,4 +50,66 @@ final class NativeEventDateTests: XCTestCase {
         let floating = NativeEventReadDates(start: start, end: end, isAllDay: false, nativeTimeZone: nil, occurrenceDate: nil, systemTimeZone: system)
         XCTAssertEqual(floating.timeZoneID, "Europe/Madrid"); XCTAssertNil(floating.occurrenceID)
     }
+    func testExactInclusiveAllDayEndsBecomeExclusiveForSnapshotAndBusyPlan() throws {
+        let system = try XCTUnwrap(TimeZone(identifier: "Europe/Madrid"))
+        for (startText, inclusiveText, exclusiveText, startDay, endDay, hours) in [
+            ("2026-03-29T00:00:00+01:00", "2026-03-29T23:59:59+02:00", "2026-03-30T00:00:00+02:00", "2026-03-29", "2026-03-30", 23.0),
+            ("2026-10-25T00:00:00+02:00", "2026-10-25T23:59:59+01:00", "2026-10-26T00:00:00+01:00", "2026-10-25", "2026-10-26", 25.0),
+            ("2026-03-28T00:00:00+01:00", "2026-03-29T23:59:59+02:00", "2026-03-30T00:00:00+02:00", "2026-03-28", "2026-03-30", 47.0)
+        ] {
+            let start = try instant(startText), inclusive = try instant(inclusiveText), exclusive = try instant(exclusiveText)
+            let dates = NativeEventReadDates(start: start, end: inclusive, isAllDay: true, nativeTimeZone: nil, occurrenceDate: nil, systemTimeZone: system)
+            XCTAssertEqual(dates.interval.start, start); XCTAssertEqual(dates.interval.end, exclusive)
+            XCTAssertEqual(dates.interval.end.timeIntervalSince(dates.interval.start), hours * 3600)
+            let window = QueryWindow(start: start, end: exclusive)
+            let exported = try snapshot(dates, allDay: true, window: window)
+            XCTAssertEqual(exported.startDate, startDay); XCTAssertEqual(exported.endDate, endDay)
+            let source = CalendarPolicy(sourceID: "account", calendarID: "calendar", owner: "Owner", label: "Calendar", busySource: true)
+            let target = CalendarPolicy(sourceID: "account", calendarID: "target", owner: "Owner", label: "Target", busyTarget: true)
+            let event = SourceEvent(sourceID: "account", calendarID: "calendar", eventID: "original", title: "Fixture", interval: dates.interval, isAllDay: true)
+            let plan = try BusyPlanner(installationID: UUID()).plan(events: [event], policies: [source, target], existing: [], window: window, completeSources: [source.identity, target.identity])
+            XCTAssertEqual(plan.creates.count, 1); XCTAssertEqual(plan.creates.first?.interval, EventInterval(start: start, end: exclusive))
+            XCTAssertEqual(plan.creates.first?.isAllDay, true)
+        }
+    }
+    func testNearMidnightSubsecondAndNonMidnightStartAreNeverRounded() throws {
+        let system = try XCTUnwrap(TimeZone(identifier: "Europe/Madrid"))
+        let midnight = try instant("2026-03-29T00:00:00+01:00")
+        let exclusive = try instant("2026-03-30T00:00:00+02:00")
+        for (start, end) in [(midnight, exclusive.addingTimeInterval(-2)), (midnight, exclusive.addingTimeInterval(-60)), (midnight, exclusive.addingTimeInterval(-0.5)), (midnight, exclusive.addingTimeInterval(-1.5)), (midnight.addingTimeInterval(1), exclusive.addingTimeInterval(-1))] {
+            let dates = NativeEventReadDates(start: start, end: end, isAllDay: true, nativeTimeZone: nil, occurrenceDate: nil, systemTimeZone: system)
+            XCTAssertEqual(dates.interval.start, start); XCTAssertEqual(dates.interval.end, end)
+            XCTAssertThrowsError(try snapshot(dates, allDay: true, window: QueryWindow(start: midnight, end: exclusive))) { error in
+                XCTAssertEqual(error as? SnapshotError, .invalidAllDayBoundary)
+            }
+        }
+        let timed = NativeEventReadDates(start: midnight, end: exclusive.addingTimeInterval(-1), isAllDay: false, nativeTimeZone: system, occurrenceDate: nil, systemTimeZone: system)
+        XCTAssertEqual(timed.interval.end, exclusive.addingTimeInterval(-1))
+        XCTAssertEqual(try snapshot(timed, allDay: false, window: QueryWindow(start: midnight, end: exclusive)).end, "2026-03-29T23:59:59.000+02:00")
+    }
+    func testManagedInclusiveEndResolvesPendingReceiptAndReplayWithoutDrift() throws {
+        let system = try XCTUnwrap(TimeZone(identifier: "Europe/Madrid"))
+        let start = try instant("2026-03-29T00:00:00+01:00"), exclusive = try instant("2026-03-30T00:00:00+02:00")
+        let source = CalendarPolicy(sourceID: "account", calendarID: "source", owner: "Owner", label: "Source", busySource: true)
+        let target = CalendarPolicy(sourceID: "account", calendarID: "target", owner: "Owner", label: "Target", busyTarget: true)
+        let installation = UUID(), window = QueryWindow(start: start, end: exclusive)
+        let original = SourceEvent(sourceID: "account", calendarID: "source", eventID: "original", title: "Fixture", interval: EventInterval(start: start, end: exclusive), isAllDay: true)
+        let initial = try BusyPlanner(installationID: installation).plan(events: [original], policies: [source, target], existing: [], window: window, completeSources: [source.identity, target.identity])
+        let desired = try XCTUnwrap(initial.creates.first)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("inclusive-receipt-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try OwnershipReceiptStore(directoryURL: directory, installationID: installation).beginCreate(desired)
+        let observed = NativeEventReadDates(start: start, end: exclusive.addingTimeInterval(-1), isAllDay: true, nativeTimeZone: nil, occurrenceDate: nil, systemTimeZone: system)
+        let provider = FakeCalendarProvider()
+        provider.inventory = [source, target].map { ProviderCalendar(descriptor: CalendarDescriptor(sourceID: $0.sourceID, calendarID: $0.calendarID, name: $0.label, owner: $0.owner, timeZoneID: "Europe/Madrid", localRead: .failed)) }
+        provider.rows = [ProviderEvent(id: "original", event: original), ProviderEvent(id: "managed", event: SourceEvent(sourceID: "account", calendarID: "target", eventID: "managed", title: "Занято", interval: observed.interval, isAllDay: true, availability: .busy, ownershipMarker: desired.ownershipMarker, timeZoneID: observed.timeZoneID))]
+        let adapter = EventKitAdapter(provider: provider, installationID: installation, receipts: try OwnershipReceiptStore(directoryURL: directory, installationID: installation))
+        let reads = try [source, target].map { try adapter.read(policy: $0, window: window) }
+        XCTAssertTrue(reads.allSatisfy(\.complete))
+        let repaired = try BusyPlanner(installationID: installation).plan(events: reads.flatMap(\.events), policies: [source, target], existing: reads.flatMap(\.blocks), window: window, completeSources: Set(reads.filter(\.complete).map { $0.descriptor.identity }))
+        XCTAssertTrue(repaired.creates.isEmpty); XCTAssertTrue(repaired.updates.isEmpty); XCTAssertTrue(repaired.deletes.isEmpty)
+        try adapter.authorizeReviewedPlan(initial); try adapter.apply(initial)
+        XCTAssertEqual(provider.writes, 0); XCTAssertEqual(provider.rows.count, 2)
+    }
+
 }
