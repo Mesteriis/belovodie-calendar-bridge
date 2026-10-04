@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "BelovodieCalendarBridge",
-    platforms: [.macOS(.v13)],
+    platforms: [.macOS(.v14)],
     products: [.library(name: "BridgeCore", targets: ["BridgeCore"])],
     targets: [
         .target(name: "BridgeCore"),

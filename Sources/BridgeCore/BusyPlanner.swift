@@ -61,14 +61,25 @@ public struct BusyPlanner: Sendable {
                 : []
             var consumed: Set<Int> = []
 
-            for block in desired {
-                let marker = Ownership.decode(block.ownershipMarker)!
-                let matches = owned.indices.filter { owned[$0].marker.linkID == marker.linkID }
-                // A query boundary cannot justify shrinking a block whose coverage extends beyond it.
-                if matches.contains(where: { !Self.contained(owned[$0].block.interval, in: window) }) {
-                    consumed.formUnion(matches)
-                    continue
+            for plannedBlock in desired {
+                let marker = Ownership.decode(plannedBlock.ownershipMarker)!
+                let sameLink = owned.indices.filter { owned[$0].marker.linkID == marker.linkID }
+                let protected = sameLink.filter { !Self.contained(owned[$0].block.interval, in: window) }
+                var uncovered = [plannedBlock.interval]
+                for index in protected {
+                    let interval = owned[index].block.interval
+                    if Self.valid(start: interval.start, end: interval.end) {
+                        uncovered = uncovered.flatMap { Self.subtract(interval, from: $0) }
+                    }
                 }
+                // Valid protected spans can only cover the window's prefix/suffix, leaving at most one gap.
+                guard let interval = uncovered.first else { continue }
+                let block = DesiredBlock(sourceID: plannedBlock.sourceID, calendarID: plannedBlock.calendarID,
+                                         title: plannedBlock.title, interval: interval,
+                                         isAllDay: plannedBlock.isAllDay && interval == plannedBlock.interval,
+                                         ownershipMarker: plannedBlock.ownershipMarker)
+                // Preserved boundary blocks cannot be updated, or suppress a moved instance's uncovered time.
+                let matches = sameLink.filter { Self.contained(owned[$0].block.interval, in: window) }
                 guard let index = matches.first(where: { Self.matches(owned[$0].block, block) }) ?? matches.first else {
                     creates.append(block)
                     continue

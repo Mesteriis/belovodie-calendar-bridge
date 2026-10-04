@@ -1,6 +1,6 @@
 # BridgeCore boundary contract
 
-`BridgeCore` is a pure SwiftPM library using only Apple's Foundation and CryptoKit. It neither reads calendars nor writes events. Run `swift test` to check its rules.
+`BridgeCore` requires macOS 14 or later and is a pure SwiftPM library using only Apple's Foundation and CryptoKit. It neither reads calendars nor writes events. Run `swift test` to check its rules.
 
 ## Calendar identity and reads
 
@@ -26,4 +26,4 @@ Markers bind to the installation **and target calendar hash**; a marker copied t
 
 Desired link hashes use target identity, contributing stable event-instance identities and uncovered-fragment index; they exclude times and titles. Moves with unchanged contributors update a block in place. When overlap membership changes, reconciliation may create a new block and delete superseded owned blocks. Fully applied plans are idempotent; duplicate owned blocks are removed after complete reads. User originals and foreign-installation blocks never appear in mutations.
 
-Reconciliation only mutates existing owned blocks entirely inside the query window. Blocks wholly outside or crossing its boundary remain untouched. The adapter must review the plan, revalidate current IDs/markers immediately before writes, and apply serially. Execute creates/updates before stale deletes so interrupted writes do not leave uncovered time. `BusyPlan.cleanupSuppressed` signals missing required read evidence; it does not indicate whether out-of-window blocks exist.
+Reconciliation only mutates existing owned blocks entirely inside the query window. Blocks wholly outside or crossing its boundary remain untouched. Their same-link coverage is subtracted before reconciling the desired in-window interval, so preserved blocks cannot suppress uncovered moved-instance time or cause duplicate covered spans. The adapter must review the plan, revalidate current IDs/markers immediately before writes, and apply serially. Execute creates/updates before stale deletes so interrupted writes do not leave uncovered time. `BusyPlan.cleanupSuppressed` signals missing required read evidence; it does not indicate whether out-of-window blocks exist.

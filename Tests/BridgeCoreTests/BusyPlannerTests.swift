@@ -233,6 +233,46 @@ final class BusyPlannerTests: XCTestCase {
         XCTAssertTrue(try plan([], existing: [stored(outside)], in: query).deletes.isEmpty)
     }
 
+    func testBoundaryCrossingOldBlockDoesNotSuppressMovedCoverage() throws {
+        let query = QueryWindow(start: Date(timeIntervalSince1970: 150), end: Date(timeIntervalSince1970: 250))
+        let initial = try XCTUnwrap(plan([event("stable", start: 100, end: 200)]).creates.first)
+        let old = stored(initial, id: "old-boundary-block")
+        let moved = event("stable", start: 210, end: 240)
+        let result = try plan([moved], existing: [old], in: query)
+        XCTAssertEqual(result.creates.count, 1)
+        let addition = try XCTUnwrap(result.creates.first)
+        XCTAssertEqual(addition.interval, EventInterval(start: Date(timeIntervalSince1970: 210),
+                                                       end: Date(timeIntervalSince1970: 240)))
+        XCTAssertTrue(result.updates.isEmpty)
+        XCTAssertTrue(result.deletes.isEmpty)
+        let rerun = try plan([moved], existing: [old, stored(addition, id: "new-block")], in: query)
+        XCTAssertTrue(rerun.creates.isEmpty)
+        XCTAssertTrue(rerun.updates.isEmpty)
+        XCTAssertTrue(rerun.deletes.isEmpty)
+    }
+
+    func testProtectedBoundaryCoverageCreatesOnlyItsUncoveredRemainder() throws {
+        let query = QueryWindow(start: Date(timeIntervalSince1970: 150), end: Date(timeIntervalSince1970: 250))
+        let initial = try XCTUnwrap(plan([event("stable", start: 100, end: 200)]).creates.first)
+        let old = stored(initial, id: "old-boundary-block")
+        let moved = event("stable", start: 180, end: 240)
+        let result = try plan([moved], existing: [old], in: query)
+        let addition = try XCTUnwrap(result.creates.first)
+        XCTAssertEqual(result.creates.count, 1)
+        XCTAssertEqual(addition.interval, EventInterval(start: Date(timeIntervalSince1970: 200),
+                                                       end: Date(timeIntervalSince1970: 240)))
+        XCTAssertTrue(result.updates.isEmpty)
+        XCTAssertTrue(result.deletes.isEmpty)
+        let rerun = try plan([moved], existing: [old, stored(addition, id: "new-block")], in: query)
+        XCTAssertTrue(rerun.creates.isEmpty)
+        XCTAssertTrue(rerun.updates.isEmpty)
+        XCTAssertTrue(rerun.deletes.isEmpty)
+        let unchanged = try plan([event("stable", start: 100, end: 200)], existing: [old], in: query)
+        XCTAssertTrue(unchanged.creates.isEmpty)
+        XCTAssertTrue(unchanged.updates.isEmpty)
+        XCTAssertTrue(unchanged.deletes.isEmpty)
+    }
+
     func testAllDaySpanAcrossDSTUsesAbsoluteProviderBoundaries() throws {
         let parser = ISO8601DateFormatter()
         let start = parser.date(from: "2026-03-28T23:00:00Z")! // Madrid midnight
