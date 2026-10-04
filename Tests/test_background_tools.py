@@ -6,10 +6,14 @@ import plistlib
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("receiver", ROOT / "adapters/ha_ssh_receiver.py")
 receiver = importlib.util.module_from_spec(spec); spec.loader.exec_module(receiver)
+
+installer_spec = importlib.util.spec_from_file_location("installer", ROOT / "scripts/install-agent.py")
+installer = importlib.util.module_from_spec(installer_spec); installer_spec.loader.exec_module(installer)
 
 class BackgroundToolsTests(unittest.TestCase):
     def snapshot(self):
@@ -44,6 +48,35 @@ class BackgroundToolsTests(unittest.TestCase):
             receiver.MAX_PAYLOAD_BYTES = 3
             with self.assertRaises(ValueError): receiver.parse_snapshot(io.BytesIO(b'1234'))
         finally: receiver.MAX_PAYLOAD_BYTES = original
+
+    def test_stop_then_uninstall_removes_already_unloaded_agent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            destination = home / "Library/LaunchAgents" / (installer.LABEL + ".plist")
+            destination.parent.mkdir(parents=True); destination.write_bytes(b"test plist")
+            outcomes = iter([0, 3])
+            def launchctl(arguments, **kwargs):
+                self.assertEqual(arguments, ["/bin/launchctl", "bootout", "gui/" + str(installer.os.getuid()) + "/" + installer.LABEL])
+                code = next(outcomes)
+                if kwargs.get("check") and code: raise subprocess.CalledProcessError(code, arguments)
+                return subprocess.CompletedProcess(arguments, code)
+            with patch.object(installer.Path, "home", return_value=home), patch.object(installer.subprocess, "run", side_effect=launchctl):
+                with patch.object(installer.sys, "argv", ["install-agent.py", "stop"]): self.assertEqual(installer.main(), 0)
+                self.assertTrue(destination.exists())
+                with patch.object(installer.sys, "argv", ["install-agent.py", "uninstall"]): self.assertEqual(installer.main(), 0)
+            self.assertFalse(destination.exists())
+
+    def test_uninstall_preserves_plist_on_genuine_launchctl_error(self):
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            destination = home / "Library/LaunchAgents" / (installer.LABEL + ".plist")
+            destination.parent.mkdir(parents=True); destination.write_bytes(b"test plist")
+            def launchctl(arguments, **kwargs):
+                if kwargs.get("check"): raise subprocess.CalledProcessError(5, arguments)
+                return subprocess.CompletedProcess(arguments, 5)
+            with patch.object(installer.Path, "home", return_value=home), patch.object(installer.subprocess, "run", side_effect=launchctl), patch.object(installer.sys, "argv", ["install-agent.py", "uninstall"]):
+                with self.assertRaises(subprocess.CalledProcessError): installer.main()
+            self.assertEqual(destination.read_bytes(), b"test plist")
 
     def test_generate_agent_escapes_paths_and_does_not_enable_writes(self):
         with tempfile.TemporaryDirectory() as directory:

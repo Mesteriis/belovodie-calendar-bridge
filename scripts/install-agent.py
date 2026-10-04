@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Install one per-user app LaunchAgent. This never changes calendar/write settings."""
 import argparse
+import errno
 import os
 from pathlib import Path
 import plistlib
@@ -39,6 +40,15 @@ def atomic_plist(path, payload):
         if os.path.exists(temporary): os.unlink(temporary)
 
 
+def bootout(service, allow_unloaded=False):
+    arguments = ["/bin/launchctl", "bootout", service]
+    result = subprocess.run(arguments, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # launchctl bootout reports ESRCH when the named service is already unloaded.
+    # Other exit codes still block removal: do not disguise permission/runtime errors.
+    if result.returncode != 0 and not (allow_unloaded and result.returncode == errno.ESRCH):
+        raise subprocess.CalledProcessError(result.returncode, arguments)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["generate", "install", "start", "stop", "restart", "uninstall"])
@@ -65,8 +75,8 @@ def main():
     elif args.action == "start":
         subprocess.run(["/bin/launchctl", "bootstrap", target, str(destination)], check=True)
     elif args.action in {"stop", "uninstall"}:
-        subprocess.run(["/bin/launchctl", "bootout", service], check=True)
-        if args.action == "uninstall": destination.unlink()
+        bootout(service, allow_unloaded=args.action == "uninstall")
+        if args.action == "uninstall": destination.unlink(missing_ok=True)
     else:
         subprocess.run(["/bin/launchctl", "kickstart", "-k", service], check=True)
     return 0

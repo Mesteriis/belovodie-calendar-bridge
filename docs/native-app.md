@@ -88,7 +88,8 @@ Use `python3 scripts/install-agent.py generate --app /absolute/path/Bridge.app
 or starting it. `install --app ...` verifies the existing bundle signature, writes
 a private per-user LaunchAgent and bootstraps it. Subsequent `stop`, `start`, and
 `restart` operate on that launchd service; `uninstall` removes its plist after
-stopping it. KeepAlive restarts an app quit while installed: use `stop` before
+stopping it. Uninstall also accepts an already-unloaded named service (ESRCH);
+other launchctl failures preserve the plist and fail visibly. KeepAlive restarts an app quit while installed: use `stop` before
 quitting when persistent shutdown is intended. A manual owner can keep syncing
 after `stop` because it is independent of launchd; quit that owner explicitly.
 Installation never enables event writes or modifies calendar settings.
@@ -101,7 +102,9 @@ future scheduled work; an already submitted SSH payload may finish within its
 30-second deadline. After publication suspends, local apply obtains fresh complete
 read evidence to prevent foreground previews from replacing the adapter's evidence.
 
-The default mode exports originals and calculates plans without writing events.
+The default mode exports originals without writing events. Count-only planning is
+explicit; a planner error cannot block an otherwise valid snapshot publication.
+With writes enabled, planning errors fail only reconciliation and schedule repair.
 The settings action **Проверить активный план записи** reviews the count-only plan
 for saved active settings. **Начальная проверка завершена — включить запись**
 requires that review and an unchanged, complete fresh plan. The owner uses it only
@@ -112,7 +115,9 @@ login/restart, but every run must obtain complete reads and one-shot adapter
 authorization for its current plan. Legacy/missing/corrupt mode data starts with
 writes off; corruption is visible. Draft edits revoke write intent immediately;
 applying changed policies/window also revokes it. The OFF action persists revocation.
-A failed revocation leaves writes off in memory and shows that restart must wait
+The OFF action stays available while SSH is in flight and prevents the suspended
+run from subsequently applying a plan. A failed revocation leaves writes off in
+memory and shows that restart must wait
 until private storage is repaired.
 
 **Передать снимок в HA сейчас** is available in settings and the menu. Publication

@@ -44,10 +44,10 @@ public struct CalendarSettingsView: View {
             }
             Text("Запись блоков: \(model.coordinator?.writesEnabled == true ? "ВКЛ" : "ВЫКЛ")").font(.caption)
             HStack {
-                Button("Проверить активный план записи") { model.prepareWriteReview() }
-                Button("Начальная проверка завершена — включить запись") { model.enableWrites() }.disabled(!model.canEnableWrites)
+                Button("Проверить активный план записи") { model.prepareWriteReview() }.disabled(model.coordinator?.running == true)
+                Button("Начальная проверка завершена — включить запись") { model.enableWrites() }.disabled(!model.canEnableWrites || model.coordinator?.running == true)
                 Button("Выключить запись") { model.disableWrites() }
-            }.disabled(model.coordinator?.running == true)
+            }
             Text(model.writeReviewSummary).font(.caption)
             Text("Включайте запись только после проверки реальных провайдеров. Изменение настроек выключает запись.").font(.caption).foregroundStyle(.secondary)
         }

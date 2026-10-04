@@ -103,6 +103,35 @@ import XCTest
         XCTAssertNil(transport.snapshots.first?.calendars.first?.events)
         restarted.stop()
     }
+    func testConflictingBusyOnlyInstancesCannotBlockUnrelatedExport() async throws {
+        for enabled in [false, true] {
+            let (sync, provider, clock, transport, dir, initial) = try fixture(); defer { try? FileManager.default.removeItem(at: dir) }
+            var settings = initial
+            settings.policies.append(CalendarPolicy(sourceID: "account", calendarID: "busy-only", owner: "Owner", label: "Busy only", busySource: true))
+            provider.inventory.append(ProviderCalendar(descriptor: CalendarDescriptor(sourceID: "account", calendarID: "busy-only", name: "Busy only", owner: "Owner", timeZoneID: "UTC", localRead: .failed)))
+            try sync.updateSettings(settings)
+            if enabled { _ = try sync.previewInitialPlan(); try sync.enableReviewedWrites() }
+            for (row, start) in [("provider-row-a", 301.0), ("provider-row-b", 351.0)] {
+                provider.rows.append(ProviderEvent(id: row, event: SourceEvent(sourceID: "account", calendarID: "busy-only", eventID: "same-instance", title: "Conflicting busy original", interval: EventInterval(start: Date(timeIntervalSince1970: start), end: Date(timeIntervalSince1970: start + 100)))))
+            }
+            sync.requestSync(reason: .manual); clock.advance(0); await settle()
+            XCTAssertEqual(transport.snapshots.count, 1)
+            XCTAssertEqual(transport.snapshots.first?.calendars.first?.events?.first?.title, "Private $(event)")
+            XCTAssertNotNil(sync.lastSuccessfulSync); XCTAssertEqual(provider.writes, 0)
+            XCTAssertEqual(sync.failed, enabled)
+        }
+    }
+    func testRevocationDuringTransportPreventsApplyAndPersistsOff() async throws {
+        let (sync, provider, clock, transport, dir, settings) = try fixture(); defer { try? FileManager.default.removeItem(at: dir) }
+        _ = try sync.previewInitialPlan(); try sync.enableReviewedWrites()
+        transport.suspend = true; sync.requestSync(reason: .manual); clock.advance(0); await settle()
+        XCTAssertTrue(sync.running); XCTAssertEqual(provider.writes, 0)
+        try sync.disableWrites(); XCTAssertFalse(sync.writesEnabled)
+        transport.resume(); await settle()
+        XCTAssertEqual(provider.writes, 0); XCTAssertNotNil(sync.lastSuccessfulSync)
+        let restarted = SyncCoordinator(adapter: EventKitAdapter(provider: provider, installationID: settings.installationID), settings: settings, directoryURL: dir, transport: transport, clock: clock)
+        XCTAssertFalse(restarted.writesEnabled)
+    }
     func testOwnershipRejectsSymlinkAndCorruptWriteIntentNeverEnables() throws {
         let (sync, provider, clock, transport, dir, settings) = try fixture(); defer { try? FileManager.default.removeItem(at: dir) }
         _ = sync

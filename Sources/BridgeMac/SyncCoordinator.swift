@@ -124,28 +124,33 @@ private struct WriteIntent: Codable {
         guard !running else { throw SyncCoordinatorError.busy }
         review = nil
         let slice = try readSlice()
-        guard slice.reads.allSatisfy(\.complete), !slice.plan.cleanupSuppressed else { throw SyncCoordinatorError.incompleteRead }
-        review = (settings, slice.plan)
-        return slice.plan
+        let plan = try buildPlan(slice)
+        guard slice.reads.allSatisfy(\.complete), !plan.cleanupSuppressed else { throw SyncCoordinatorError.incompleteRead }
+        review = (settings, plan)
+        return plan
     }
     public func enableReviewedWrites() throws {
         guard !running, let review, review.0 == settings else { throw SyncCoordinatorError.reviewRequired }
         // Re-read immediately before persisting operator opt-in. A changed plan needs another review.
         let slice = try readSlice()
-        guard slice.reads.allSatisfy(\.complete), slice.plan == review.1, !slice.plan.cleanupSuppressed else { throw SyncCoordinatorError.reviewRequired }
+        let plan = try buildPlan(slice)
+        guard slice.reads.allSatisfy(\.complete), plan == review.1, !plan.cleanupSuppressed else { throw SyncCoordinatorError.reviewRequired }
         try intentStore.save(JSONEncoder().encode(WriteIntent(version: 1, installationID: settings.installationID, settingsDigest: try Self.digest(settings))))
         writesEnabled = true; self.review = nil
         status = "Запись включена для проверенных активных настроек"
     }
-    private func readSlice() throws -> (reads: [SourceReadResult], window: QueryWindow, plan: BusyPlan) {
+    private typealias ReadSlice = (reads: [SourceReadResult], window: QueryWindow)
+    private func readSlice() throws -> ReadSlice {
         guard adapter.access == .fullAccess else { throw EventKitAdapterError.permissionRequired }
         let calendar = Calendar.current; let today = calendar.startOfDay(for: clock.now)
         guard let start = calendar.date(byAdding: .day, value: -settings.lookbackDays, to: today),
               let end = calendar.date(byAdding: .day, value: settings.lookaheadDays, to: today) else { throw SyncCoordinatorError.incompleteRead }
         let window = QueryWindow(start: start, end: end)
         let reads = try settings.policies.filter { adapter.requiresRead($0) }.map { try adapter.read(policy: $0, window: window) }
-        let plan = try BusyPlanner(installationID: settings.installationID).plan(events: reads.flatMap(\.events), policies: settings.policies, existing: reads.flatMap(\.blocks), window: window, completeSources: Set(reads.filter(\.complete).map { $0.descriptor.identity }))
-        return (reads, window, plan)
+        return (reads, window)
+    }
+    private func buildPlan(_ slice: ReadSlice) throws -> BusyPlan {
+        try BusyPlanner(installationID: settings.installationID).plan(events: slice.reads.flatMap(\.events), policies: settings.policies, existing: slice.reads.flatMap(\.blocks), window: slice.window, completeSources: Set(slice.reads.filter(\.complete).map { $0.descriptor.identity }))
     }
     private func run() async {
         let runRevision = revision
@@ -166,8 +171,9 @@ private struct WriteIntent: Codable {
                     // Sending suspends this actor: UI reads may replace adapter evidence meanwhile.
                     // Obtain fresh evidence for apply rather than using a pre-send plan/evidence pair.
                     let current = try readSlice()
-                    guard current.reads.allSatisfy(\.complete), !current.plan.cleanupSuppressed else { throw SyncCoordinatorError.incompleteRead }
-                    try adapter.authorizeReviewedPlan(current.plan); try adapter.apply(current.plan)
+                    let plan = try buildPlan(current)
+                    guard current.reads.allSatisfy(\.complete), !plan.cleanupSuppressed else { throw SyncCoordinatorError.incompleteRead }
+                    try adapter.authorizeReviewedPlan(plan); try adapter.apply(plan)
                     reconciliationStatus = "План занятости применён"
                 } catch {
                     needsRetry = true
