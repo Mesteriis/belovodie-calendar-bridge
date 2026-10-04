@@ -41,9 +41,16 @@ health. The app always labels Google/iCloud health unknown. A successful synchro
 query with full access and an unchanged calendar identity provides local complete
 read evidence; missing inventory, denied access, malformed/ambiguous rows and failed
 queries do not provide an authoritative empty snapshot. Busy availability/read-only
-limitations are shown separately. EKCalendar exposes no calendar timezone; floating
-and all-day events use the system zone. Timed events preserve the provider timezone
-where present. Original recurrence identity uses the external series identifier
+limitations are shown separately. EKCalendar exposes no calendar timezone.
+The SDK `EventKit.framework/Headers/EKEvent.h` documents all-day/floating
+[`startDate`](https://developer.apple.com/documentation/eventkit/ekevent/startdate)
+and `occurrenceDate` values in the default timezone. Conversion therefore selects
+`NSTimeZone.default` for all-day export and recurrence date anchors even if
+`EKEvent.timeZone` names a different zone. Start/end instants are preserved exactly;
+no midnight rounding or fabricated boundaries are applied. Strict snapshot
+midnight validation remains unchanged. Timed events preserve the explicit provider
+timezone where present, with the existing `TimeZone.current` fallback. Original
+recurrence identity uses the external series identifier
 (local item identifier fallback) and original `occurrenceDate`, including moved
 exceptions; all-day recurrence anchors use the local Gregorian date. A full provider
 resync may replace fallback local identifiers: EventKit offers no stronger stable

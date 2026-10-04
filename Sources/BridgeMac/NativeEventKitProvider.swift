@@ -2,6 +2,30 @@ import Foundation
 import EventKit
 import BridgeCore
 
+/// Pure conversion of EventKit's already-resolved dates; never moves or rounds provider instants.
+struct NativeEventReadDates {
+    let interval: EventInterval
+    let timeZoneID: String
+    let occurrenceID: String?
+    init(start: Date, end: Date, isAllDay: Bool, nativeTimeZone: TimeZone?, occurrenceDate: Date?, systemTimeZone: TimeZone) {
+        interval = EventInterval(start: start, end: end)
+        // EKEvent.h: floating/all-day startDate and occurrenceDate use defaultTimeZone,
+        // even if the event carries another explicit zone. Timed events retain that zone.
+        timeZoneID = (isAllDay ? systemTimeZone : (nativeTimeZone ?? systemTimeZone)).identifier
+        occurrenceID = occurrenceDate.map { anchor in
+            if isAllDay {
+                let formatter = DateFormatter()
+                formatter.calendar = Calendar(identifier: .gregorian)
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.timeZone = systemTimeZone
+                formatter.dateFormat = "yyyy-MM-dd"
+                return formatter.string(from: anchor)
+            }
+            return String(anchor.timeIntervalSinceReferenceDate)
+        }
+    }
+}
+
 /// Owns the only EKEventStore. It is created by the bundled app, never by a shell helper.
 @MainActor public final class NativeEventKitProvider: CalendarProvider {
     private let store = EKEventStore()
@@ -48,17 +72,10 @@ import BridgeCore
               let identifier = event.eventIdentifier, !identifier.isEmpty else { throw EventKitAdapterError.incompleteRead }
         let recurring = event.hasRecurrenceRules || event.isDetached
         guard !recurring || event.occurrenceDate != nil else { throw EventKitAdapterError.incompleteRead }
-        let occurrence = recurring ? event.occurrenceDate.map { anchor in
-            if event.isAllDay {
-                let formatter = DateFormatter()
-                formatter.calendar = Calendar(identifier: .gregorian)
-                formatter.locale = Locale(identifier: "en_US_POSIX")
-                formatter.timeZone = TimeZone.current
-                formatter.dateFormat = "yyyy-MM-dd"
-                return formatter.string(from: anchor)
-            }
-            return String(anchor.timeIntervalSinceReferenceDate)
-        } : nil
+        let dates = NativeEventReadDates(start: start, end: end, isAllDay: event.isAllDay,
+            nativeTimeZone: event.timeZone, occurrenceDate: recurring ? event.occurrenceDate : nil,
+            systemTimeZone: event.isAllDay ? NSTimeZone.default : TimeZone.current)
+        let occurrence = dates.occurrenceID
         let currentParticipant = event.attendees?.first { $0.isCurrentUser }
         let participation: ParticipationStatus
         if event.organizer?.isCurrentUser == true { participation = .organizer }
@@ -85,10 +102,10 @@ import BridgeCore
         return ProviderEvent(id: rowID, event: SourceEvent(sourceID: calendar.source.sourceIdentifier,
             calendarID: calendar.calendarIdentifier,
             eventID: event.calendarItemExternalIdentifier ?? event.calendarItemIdentifier,
-            occurrenceID: occurrence, title: event.title ?? "", interval: EventInterval(start: start, end: end),
+            occurrenceID: occurrence, title: event.title ?? "", interval: dates.interval,
             isAllDay: event.isAllDay, participation: participation, availability: availability,
             isCancelled: event.status == .canceled, ownershipMarker: event.notes,
-            timeZoneID: event.timeZone?.identifier ?? TimeZone.current.identifier),
+            timeZoneID: dates.timeZoneID),
             safeToModify: !recurring && !(event.attendees?.isEmpty == false))
     }
     public func event(id: String) throws -> ProviderEvent? {
