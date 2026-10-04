@@ -213,6 +213,93 @@ import XCTest
         XCTAssertEqual(fake.writes, 1)
     }
 
+    func testBoundaryRowsArePreservedWhileBusyCreateAppliesAndRemainsIdempotent() throws {
+        for availability in [EventAvailability.free, .busy] {
+            let (fake, adapter, initialPlan) = try fixture()
+            let marker = try XCTUnwrap(initialPlan.creates.first?.ownershipMarker)
+            let boundary = ProviderEvent(id: "boundary", event: SourceEvent(sourceID: "account", calendarID: "target", eventID: "boundary", title: "Занято", interval: EventInterval(start: Date(timeIntervalSince1970: -100), end: Date(timeIntervalSince1970: availability == .free ? 300 : 150)), availability: availability, ownershipMarker: marker))
+            fake.rows.append(boundary)
+            let policies = [policy("source", source: true), policy("target", target: true)]
+            func rescan() throws -> BusyPlan {
+                let reads = try policies.map { try adapter.read(policy: $0, window: window) }
+                XCTAssertEqual(reads.filter(\.complete).count, 2)
+                return try BusyPlanner(installationID: installation).plan(events: reads.flatMap(\.events), policies: policies, existing: reads.flatMap(\.blocks), window: window, completeSources: Set(reads.filter(\.complete).map { $0.descriptor.identity }))
+            }
+            let create = try rescan()
+            XCTAssertEqual(create.creates.count, 1); XCTAssertTrue(create.updates.isEmpty); XCTAssertTrue(create.deletes.isEmpty)
+            let desired = try XCTUnwrap(create.creates.first)
+            try adapter.authorizeReviewedPlan(create); try adapter.apply(create)
+            XCTAssertEqual(fake.writes, 1)
+            XCTAssertEqual(fake.rows.first { $0.id == boundary.id }, boundary)
+            let created = fake.rows.filter { $0.event.calendarID == "target" && $0.id != boundary.id }
+            XCTAssertEqual(created.count, 1); XCTAssertEqual(created.first?.event.availability, .busy)
+            XCTAssertEqual(created.first?.event.interval, desired.interval)
+            try adapter.authorizeReviewedPlan(create); try adapter.apply(create)
+            XCTAssertEqual(fake.writes, 1)
+            let unchanged = try rescan()
+            XCTAssertTrue(unchanged.creates.isEmpty); XCTAssertTrue(unchanged.updates.isEmpty); XCTAssertTrue(unchanged.deletes.isEmpty)
+            try adapter.authorizeReviewedPlan(unchanged); try adapter.apply(unchanged)
+            XCTAssertEqual(fake.writes, 1); XCTAssertEqual(fake.rows.first { $0.id == boundary.id }, boundary)
+            XCTAssertEqual(fake.rows.filter { $0.event.calendarID == "target" }.count, 2)
+        }
+    }
+    func testChangedProtectedBoundaryRowInvalidatesReviewedCreate() throws {
+        let (fake, adapter, initial) = try fixture()
+        let marker = try XCTUnwrap(initial.creates.first?.ownershipMarker)
+        let boundary = ProviderEvent(id: "boundary", event: SourceEvent(sourceID: "account", calendarID: "target", eventID: "boundary", title: "Занято", interval: EventInterval(start: Date(timeIntervalSince1970: -100), end: Date(timeIntervalSince1970: 300)), availability: .free, ownershipMarker: marker))
+        fake.rows.append(boundary)
+        let policies = [policy("source", source: true), policy("target", target: true)]
+        let reads = try policies.map { try adapter.read(policy: $0, window: window) }
+        let plan = try BusyPlanner(installationID: installation).plan(events: reads.flatMap(\.events), policies: policies, existing: reads.flatMap(\.blocks), window: window, completeSources: Set(policies.map(\.identity)))
+        fake.rows[fake.rows.count - 1] = ProviderEvent(id: boundary.id, event: SourceEvent(sourceID: "account", calendarID: "target", eventID: "boundary", title: "Занято", interval: EventInterval(start: Date(timeIntervalSince1970: -100), end: Date(timeIntervalSince1970: 350)), availability: .free, ownershipMarker: marker))
+        try adapter.authorizeReviewedPlan(plan); XCTAssertThrowsError(try adapter.apply(plan))
+        XCTAssertEqual(fake.writes, 0)
+        fake.rows.removeAll { $0.id == boundary.id }
+        try adapter.authorizeReviewedPlan(plan); XCTAssertThrowsError(try adapter.apply(plan))
+        XCTAssertEqual(fake.writes, 0)
+    }
+
+    func testFailedBoundaryCreateRemainsDurablyPendingBesideSameMarker() throws {
+        let (fake, _, initial) = try fixture()
+        let desired = try XCTUnwrap(initial.creates.first)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pending-boundary-test-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let boundary = ProviderEvent(id: "boundary", event: SourceEvent(sourceID: "account", calendarID: "target", eventID: "boundary", title: "Занято", interval: EventInterval(start: Date(timeIntervalSince1970: -100), end: Date(timeIntervalSince1970: 300)), availability: .free, ownershipMarker: desired.ownershipMarker))
+        fake.rows.append(boundary)
+        let adapter = EventKitAdapter(provider: fake, installationID: installation, receipts: try OwnershipReceiptStore(directoryURL: directory, installationID: installation))
+        let policies = [policy("source", source: true), policy("target", target: true)]
+        let reads = try policies.map { try adapter.read(policy: $0, window: window) }
+        let plan = try BusyPlanner(installationID: installation).plan(events: reads.flatMap(\.events), policies: policies, existing: reads.flatMap(\.blocks), window: window, completeSources: Set(policies.map(\.identity)))
+        fake.failWriteBeforePersist = true
+        try adapter.authorizeReviewedPlan(plan); XCTAssertThrowsError(try adapter.apply(plan))
+        fake.failWriteBeforePersist = false
+        let restarted = EventKitAdapter(provider: fake, installationID: installation, receipts: try OwnershipReceiptStore(directoryURL: directory, installationID: installation))
+        let uncertain = try restarted.read(policy: policy("target", target: true), window: window)
+        XCTAssertEqual(uncertain.descriptor.localRead, .failed); XCTAssertTrue(uncertain.events.isEmpty)
+        XCTAssertEqual(fake.writes, 0); XCTAssertEqual(fake.rows.first { $0.id == boundary.id }, boundary)
+        // A later exact Busy commit resolves the pending intent; a fresh scan becomes authoritative.
+        try fake.save(desired, replacing: nil)
+        XCTAssertTrue(try restarted.read(policy: policy("target", target: true), window: window).complete)
+    }
+    func testLegacyPendingWithoutBoundsStaysQuarantinedDespiteExactMarkerRow() throws {
+        let (fake, _, initial) = try fixture()
+        let desired = try XCTUnwrap(initial.creates.first)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("legacy-pending-test-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try OwnershipReceiptStore(directoryURL: directory, installationID: installation)
+        try store.beginCreate(desired)
+        let file = directory.appendingPathComponent("ownership-receipts.json")
+        var values = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var pending = try XCTUnwrap(values["pending"] as? [[String: Any]])
+        pending[0].removeValue(forKey: "interval"); pending[0].removeValue(forKey: "isAllDay")
+        values["pending"] = pending
+        try AtomicStore(fileURL: file).save(JSONSerialization.data(withJSONObject: values))
+        try fake.save(desired, replacing: nil)
+        let adapter = EventKitAdapter(provider: fake, installationID: installation, receipts: try OwnershipReceiptStore(directoryURL: directory, installationID: installation))
+        let uncertain = try adapter.read(policy: policy("target", target: true), window: window)
+        XCTAssertEqual(uncertain.descriptor.localRead, .failed); XCTAssertTrue(uncertain.events.isEmpty)
+    }
+
 }
 @MainActor final class FakeCalendarProvider: CalendarProvider {
     var access: CalendarAccess = .fullAccess
@@ -221,6 +308,7 @@ import XCTest
     var failRead = false
     var revokeDuringRead = false
     var failWriteAfterPersist = false
+    var failWriteBeforePersist = false
     var writes = 0
     func requestAccess() async throws -> Bool { access == .fullAccess }
     func calendars() throws -> [ProviderCalendar] { inventory }
@@ -231,6 +319,7 @@ import XCTest
     }
     func event(id: String) throws -> ProviderEvent? { rows.first { $0.id == id } }
     func save(_ block: DesiredBlock, replacing: ProviderEvent?) throws {
+        if failWriteBeforePersist { throw EventKitAdapterError.incompleteRead }
         writes += 1
         let row = ProviderEvent(id: replacing?.id ?? "created-\(writes)", event: SourceEvent(sourceID: block.sourceID, calendarID: block.calendarID, eventID: replacing?.event.eventID ?? "created-\(writes)", title: block.title, interval: block.interval, isAllDay: block.isAllDay, availability: .busy, ownershipMarker: block.ownershipMarker))
         if let replacing { rows.removeAll { $0.id == replacing.id } }; rows.append(row)

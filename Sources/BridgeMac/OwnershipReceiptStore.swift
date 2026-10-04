@@ -5,7 +5,14 @@ import BridgeCore
 /// A pending create survives commit-before-error and quarantines an uncertain target.
 @MainActor public final class OwnershipReceiptStore {
     private struct Receipt: Codable, Equatable { let target: String; let rowID: String; let marker: String }
-    private struct Pending: Codable, Equatable { let target: String; let marker: String }
+    private struct Pending: Codable, Equatable {
+        let target: String
+        let marker: String
+        // Private intended block bounds distinguish a new create from protected same-link rows.
+        // Legacy pending records decode without these fields and remain quarantined.
+        let interval: EventInterval?
+        let isAllDay: Bool?
+    }
     private struct State: Codable { let version: Int; let installationID: UUID; var receipts: [Receipt]; var pending: [Pending] }
     var isPersistent: Bool { storage != nil }
     private var state: State
@@ -53,7 +60,12 @@ import BridgeCore
             updated.receipts.append(receipt)
         }
         updated.pending.removeAll { pending in
-            pending.target == target && rows.contains { Ownership.decode($0.event.ownershipMarker) == Ownership.decode(pending.marker) }
+            guard pending.target == target, let interval = pending.interval, let isAllDay = pending.isAllDay else { return false }
+            return rows.contains {
+                $0.safeToModify && Ownership.decode($0.event.ownershipMarker) == Ownership.decode(pending.marker)
+                    && $0.event.interval == interval && $0.event.isAllDay == isAllDay
+                    && $0.event.availability == .busy && $0.event.title == "Занято"
+            }
         }
         try persist(updated)
         guard !state.pending.contains(where: { $0.target == target }) else { throw EventKitAdapterError.incompleteRead }
@@ -62,7 +74,7 @@ import BridgeCore
         let target = CalendarPolicy.identity(sourceID: block.sourceID, calendarID: block.calendarID)
         guard Self.valid(block.ownershipMarker, target: target, installationID: state.installationID) else { throw EventKitAdapterError.invalidOwnership }
         var updated = state
-        let pending = Pending(target: target, marker: block.ownershipMarker)
+        let pending = Pending(target: target, marker: block.ownershipMarker, interval: block.interval, isAllDay: block.isAllDay)
         if !updated.pending.contains(pending) { updated.pending.append(pending) }
         try persist(updated)
     }

@@ -133,7 +133,23 @@ public struct SourceReadResult {
             let calendar = try target(block)
             let rows = try checkedRows(calendar: calendar, window: completeReads[calendar.descriptor.identity]!.1)
             let marker = Ownership.decode(block.ownershipMarker)!
-            let matches = rows.filter { Ownership.decode($0.event.ownershipMarker)?.linkID == marker.linkID && Ownership.decode($0.event.ownershipMarker)?.installationID == installationID }
+            let read = completeReads[calendar.descriptor.identity]!
+            let sameLink = rows.filter { Ownership.decode($0.event.ownershipMarker)?.linkID == marker.linkID && Ownership.decode($0.event.ownershipMarker)?.installationID == installationID }
+            let protected = sameLink.filter { $0.event.interval.start < read.1.start || $0.event.interval.end > read.1.end }
+            let expectedProtected = read.2.blocks.filter {
+                let owned = Ownership.decode($0.ownershipMarker)
+                return owned?.installationID == installationID && owned?.linkID == marker.linkID
+                    && ($0.interval.start < read.1.start || $0.interval.end > read.1.end)
+            }
+            guard protected.count == expectedProtected.count else { throw EventKitAdapterError.stalePlan }
+            for row in protected {
+                // The planner preserves boundary rows and may create uncovered Busy time beside
+                // them. Ignore only the exact owned boundary row from the reviewed complete read;
+                // new/changed/cross-target rows invalidate this plan rather than authorize a write.
+                guard row.safeToModify, Ownership.decode(row.event.ownershipMarker) == marker,
+                      expectedProtected.contains(row.block) else { throw EventKitAdapterError.stalePlan }
+            }
+            let matches = sameLink.filter { $0.event.interval.start >= read.1.start && $0.event.interval.end <= read.1.end }
             if !matches.isEmpty {
                 guard matches.count == 1, matches[0].safeToModify, Ownership.decode(matches[0].event.ownershipMarker) == marker,
                       matches[0].event.title == "Занято", matches[0].event.interval == block.interval,
