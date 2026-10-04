@@ -71,11 +71,13 @@ public struct SourceEvent: Codable, Equatable, Sendable {
     public let availability: EventAvailability
     public let isCancelled: Bool
     public let ownershipMarker: String?
+    /// Provider event timezone; snapshot export falls back to the calendar timezone.
+    public let timeZoneID: String?
 
     public init(sourceID: String, calendarID: String, eventID: String, occurrenceID: String? = nil,
                 title: String, interval: EventInterval, isAllDay: Bool = false,
                 participation: ParticipationStatus = .unknown, availability: EventAvailability = .unknown,
-                isCancelled: Bool = false, ownershipMarker: String? = nil) {
+                isCancelled: Bool = false, ownershipMarker: String? = nil, timeZoneID: String? = nil) {
         self.sourceID = sourceID
         self.calendarID = calendarID
         self.eventID = eventID
@@ -87,6 +89,7 @@ public struct SourceEvent: Codable, Equatable, Sendable {
         self.availability = availability
         self.isCancelled = isCancelled
         self.ownershipMarker = ownershipMarker
+        self.timeZoneID = timeZoneID
     }
 
     public var calendarIdentity: String { CalendarPolicy.identity(sourceID: sourceID, calendarID: calendarID) }
