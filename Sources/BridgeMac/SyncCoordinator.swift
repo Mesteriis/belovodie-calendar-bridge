@@ -30,6 +30,44 @@ import BridgeCore
 @MainActor public protocol SnapshotTransport { func send(snapshot: CalendarSnapshot) async throws }
 public enum SyncReason { case eventChanged, manual, wake, startup, repair }
 public enum SyncCoordinatorError: Error { case reviewRequired, incompleteRead, busy, invalidMode }
+/// Bounded diagnostics only: never expose error descriptions or associated provider data.
+public enum ReadSnapshotFailureCode: String, Sendable {
+    case snapshotInvalidWindow, snapshotInvalidObservation, snapshotDuplicatePolicy, snapshotDuplicateCalendar
+    case snapshotInvalidTimeZone, snapshotInvalidEventInterval, snapshotInvalidAllDayBoundary, snapshotAmbiguousEventIdentity
+    case calendarPermissionRequired, calendarDuplicateCalendar, calendarMissingCalendar, calendarIncompleteRead
+    case calendarNotWritable, calendarBusyUnsupported, calendarWritesDisabled, calendarInvalidOwnership
+    case calendarStalePlan, calendarProviderWriteFailed, unknownReadOrSnapshotFailure
+
+    static func classify(_ error: any Error) -> Self {
+        if let error = error as? SnapshotError {
+            switch error {
+            case .invalidWindow: return .snapshotInvalidWindow
+            case .invalidObservation: return .snapshotInvalidObservation
+            case .duplicatePolicy: return .snapshotDuplicatePolicy
+            case .duplicateCalendar: return .snapshotDuplicateCalendar
+            case .invalidTimeZone: return .snapshotInvalidTimeZone
+            case .invalidEventInterval: return .snapshotInvalidEventInterval
+            case .invalidAllDayBoundary: return .snapshotInvalidAllDayBoundary
+            case .ambiguousEventIdentity: return .snapshotAmbiguousEventIdentity
+            }
+        }
+        if let error = error as? EventKitAdapterError {
+            switch error {
+            case .permissionRequired: return .calendarPermissionRequired
+            case .duplicateCalendar: return .calendarDuplicateCalendar
+            case .missingCalendar: return .calendarMissingCalendar
+            case .incompleteRead: return .calendarIncompleteRead
+            case .notWritable: return .calendarNotWritable
+            case .busyUnsupported: return .calendarBusyUnsupported
+            case .writesDisabled: return .calendarWritesDisabled
+            case .invalidOwnership: return .calendarInvalidOwnership
+            case .stalePlan: return .calendarStalePlan
+            case .providerWriteFailed: return .calendarProviderWriteFailed
+            }
+        }
+        return .unknownReadOrSnapshotFailure
+    }
+}
 private struct WriteIntent: Codable {
     let version: Int
     let installationID: UUID
@@ -42,6 +80,7 @@ private struct WriteIntent: Codable {
     public private(set) var writesEnabled = false
     public private(set) var failed = false
     public private(set) var lastSuccessfulSync: Date?
+    public private(set) var readSnapshotFailureCode: ReadSnapshotFailureCode?
     public private(set) var publicationStatus = "Передача ещё не запускалась"
     public private(set) var reconciliationStatus = "Запись выключена"
     public private(set) var status = "Фоновая синхронизация ещё не запущена"
@@ -158,6 +197,8 @@ private struct WriteIntent: Codable {
         do {
             let slice = try readSlice()
             let snapshot = try SnapshotBuilder(installationID: settings.installationID).build(events: slice.reads.flatMap(\.events), policies: settings.policies, inventory: slice.reads.map(\.descriptor), window: slice.window, observedAt: clock.now)
+            readSnapshotFailureCode = nil
+            publicationStatus = "Снимок проверен. Передача выполняется."
             do {
                 try await transport.send(snapshot: snapshot)
                 lastSuccessfulSync = clock.now
@@ -182,7 +223,9 @@ private struct WriteIntent: Codable {
             } else { reconciliationStatus = writesEnabled ? "Настройки изменились; запись отложена" : "Запись выключена" }
         } catch {
             needsRetry = true
-            publicationStatus = "Чтение или снимок недоступны. Успешные данные сохранены."
+            let code = ReadSnapshotFailureCode.classify(error)
+            readSnapshotFailureCode = code
+            publicationStatus = "Чтение или снимок недоступны [\(code.rawValue)]. Успешные данные сохранены."
             reconciliationStatus = "Запись не выполнялась"
         }
         failed = needsRetry

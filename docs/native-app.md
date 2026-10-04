@@ -152,3 +152,13 @@ The source tests use fake calendars, private temporary files and local child
 processes. They do not prove actual signed-app visibility, Calendar/cloud behavior,
 launchd/menu settings handoff or SSH-to-HA delivery. Those gates require the
 controller's stable signing, launchd start/stop/restart and initial provider checks.
+
+Read/snapshot failures expose only the bounded `readSnapshotFailureCode` enum and
+its fixed code in publication/menu status (for example
+`snapshotInvalidAllDayBoundary` or `calendarPermissionRequired`). Known
+`SnapshotError` / `EventKitAdapterError` cases map exhaustively; other errors map
+to `unknownReadOrSnapshotFailure`. Provider counts, error descriptions, titles,
+raw identities, zones and payloads are never interpolated. The code clears when
+snapshot validation succeeds and the run reaches transport, so a later transport
+failure cannot retain a stale validation diagnosis. Codes identify the rejected
+contract; they do not establish the underlying native provider cause.

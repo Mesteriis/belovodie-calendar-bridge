@@ -132,6 +132,36 @@ import XCTest
         let restarted = SyncCoordinator(adapter: EventKitAdapter(provider: provider, installationID: settings.installationID), settings: settings, directoryURL: dir, transport: transport, clock: clock)
         XCTAssertFalse(restarted.writesEnabled)
     }
+    func testSnapshotValidationReportsOnlySafeCodeAndClearsOnTransportStage() async throws {
+        let (sync, provider, clock, transport, dir, _) = try fixture(); defer { try? FileManager.default.removeItem(at: dir) }
+        let original = provider.rows[0]
+        provider.rows[0] = ProviderEvent(id: original.id, event: SourceEvent(sourceID: original.event.sourceID, calendarID: original.event.calendarID, eventID: original.event.eventID, title: "PRIVATE-TITLE-MUST-NOT-LEAK", interval: original.event.interval, isAllDay: true, timeZoneID: "UTC"))
+        sync.requestSync(reason: .manual); clock.advance(0); await settle()
+        XCTAssertTrue(sync.failed); XCTAssertTrue(transport.snapshots.isEmpty)
+        XCTAssertTrue(sync.publicationStatus.contains("snapshotInvalidAllDayBoundary"))
+        XCTAssertEqual(sync.readSnapshotFailureCode, .snapshotInvalidAllDayBoundary)
+        XCTAssertFalse(sync.status.contains("PRIVATE-TITLE-MUST-NOT-LEAK"))
+        provider.rows[0] = original; transport.fail = true
+        sync.requestSync(reason: .manual); clock.advance(0); await settle()
+        XCTAssertTrue(sync.failed); XCTAssertEqual(transport.snapshots.count, 1)
+        XCTAssertFalse(sync.publicationStatus.contains("snapshotInvalidAllDayBoundary"))
+        XCTAssertNil(sync.readSnapshotFailureCode)
+    }
+    func testReadPermissionFailureReportsBoundedKnownCode() async throws {
+        let (sync, provider, clock, transport, dir, _) = try fixture(); defer { try? FileManager.default.removeItem(at: dir) }
+        provider.access = .denied
+        sync.requestSync(reason: .manual); clock.advance(0); await settle()
+        XCTAssertTrue(sync.failed); XCTAssertTrue(transport.snapshots.isEmpty)
+        XCTAssertTrue(sync.publicationStatus.contains("calendarPermissionRequired"))
+        XCTAssertEqual(sync.readSnapshotFailureCode, .calendarPermissionRequired)
+    }
+    func testDiagnosticMappingNeverUsesUnknownErrorDescriptionOrAssociatedData() {
+        let privateError = NSError(domain: "PRIVATE-DOMAIN", code: 123, userInfo: [NSLocalizedDescriptionKey: "PRIVATE-TITLE-MUST-NOT-LEAK"])
+        XCTAssertEqual(ReadSnapshotFailureCode.classify(privateError), .unknownReadOrSnapshotFailure)
+        XCTAssertEqual(ReadSnapshotFailureCode.classify(EventKitAdapterError.providerWriteFailed(completed: 123456)), .calendarProviderWriteFailed)
+        XCTAssertEqual(ReadSnapshotFailureCode.classify(SnapshotError.invalidTimeZone), .snapshotInvalidTimeZone)
+        XCTAssertEqual(ReadSnapshotFailureCode.classify(SnapshotError.ambiguousEventIdentity), .snapshotAmbiguousEventIdentity)
+    }
     func testOwnershipRejectsSymlinkAndCorruptWriteIntentNeverEnables() throws {
         let (sync, provider, clock, transport, dir, settings) = try fixture(); defer { try? FileManager.default.removeItem(at: dir) }
         _ = sync
