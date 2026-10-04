@@ -7,3 +7,5 @@ private/
 .env.*
 *.log
 .superpowers/sdd/implementation-plan/logs/
+
+__pycache__/

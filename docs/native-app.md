@@ -26,9 +26,9 @@ Only selected calendars or calendars with private ownership provenance have thei
 events read. Missing saved choices remain present. Initial calendar selection is
 manual after checking the actual source/calendar pair; names never define identity.
 
-The app has no action that authorizes or applies event writes. No background agent,
-HA transmission, or automatic permission prompt is installed by this task. Event
-write APIs require explicit one-shot review of the exact `BusyPlan`, complete local
+The foreground draft preview remains count-only. The separate background mode below
+adds explicit reviewed write controls and HA transmission; no automatic permission
+prompt is installed. Event write APIs require explicit one-shot review of the exact `BusyPlan`, complete local
 read evidence, unchanged originals, and current target/ownership validation. A native
 provider additionally requires durable receipts. Creates/updates precede deletes;
 each provider operation commits separately and retries are idempotent. Blocks use
@@ -71,3 +71,79 @@ resolves commit-before-error. Existing same-marker boundary rows cannot resolve 
 create. Legacy pending records lacking intent bounds remain quarantined. An unresolved
 pending create quarantines its target until its exact intended Busy row is observed or a separately reviewed recovery resolves the uncertainty. There is
 no automatic repair by title/time, and no manual receipt-reset tool in this stage.
+
+## Background agent and closed SSH transport
+
+The same app owns foreground settings and the background coordinator. A private
+kernel-held `process.lock` is acquired before constructing an EventKit provider.
+A second manual launch brings the current owner's settings forward and exits;
+a second agent launch exits without reading calendars. The lock is released by
+process exit, including crashes. A user LaunchAgent invokes the **signed bundle's
+executable** with `--background`, keeps it alive and throttles repeated starts.
+Settings remain available through the menu bar. Background launch never prompts
+for Calendar permission; the owner grants full access through settings first.
+
+Use `python3 scripts/install-agent.py generate --app /absolute/path/Bridge.app
+--output /private/path/agent.plist` to review a generated agent without installing
+or starting it. `install --app ...` verifies the existing bundle signature, writes
+a private per-user LaunchAgent and bootstraps it. Subsequent `stop`, `start`, and
+`restart` operate on that launchd service; `uninstall` removes its plist after
+stopping it. KeepAlive restarts an app quit while installed: use `stop` before
+quitting when persistent shutdown is intended. A manual owner can keep syncing
+after `stop` because it is independent of launchd; quit that owner explicitly.
+Installation never enables event writes or modifies calendar settings.
+
+The coordinator repairs on launch, wake and every five minutes. EventKit changes
+are debounced for five seconds; work is serial even while SSH is suspended.
+Notifications from managed writes converge through fresh idempotent planning.
+Failures retry with 5/10/20-second backoff capped at five minutes. Stop cancels
+future scheduled work; an already submitted SSH payload may finish within its
+30-second deadline. After publication suspends, local apply obtains fresh complete
+read evidence to prevent foreground previews from replacing the adapter's evidence.
+
+The default mode exports originals and calculates plans without writing events.
+The settings action **Проверить активный план записи** reviews the count-only plan
+for saved active settings. **Начальная проверка завершена — включить запись**
+requires that review and an unchanged, complete fresh plan. The owner uses it only
+after the initial real-provider checks. `write-intent.json` records version,
+installation UUID and SHA-256 of the exact active settings through `AtomicStore`;
+no event data or duplicate ownership journal is stored there. Enabled mode survives
+login/restart, but every run must obtain complete reads and one-shot adapter
+authorization for its current plan. Legacy/missing/corrupt mode data starts with
+writes off; corruption is visible. Draft edits revoke write intent immediately;
+applying changed policies/window also revokes it. The OFF action persists revocation.
+A failed revocation leaves writes off in memory and shows that restart must wait
+until private storage is repaired.
+
+**Передать снимок в HA сейчас** is available in settings and the menu. Publication
+and busy reconciliation are independent: a failed apply still permits originals /
+health publication, and failed SSH does not stop otherwise reviewed local writes.
+The displayed last-successful timestamp advances only after successful SSH exit.
+Failures never replace it or create a Mac event cache. Incomplete calendars emit
+health-only entries according to the shared snapshot contract; HA keeps old events.
+
+Private `ssh.json` in the same Application Support directory contains `hostAlias`,
+absolute `identityFile`, absolute `knownHostsFile`, `port` (default 22), and optional
+absolute `configFile`. It is loaded through `AtomicStore`; bindings remain outside
+Git. Use a private SSH config to bind an alias, remote user and host. The transport
+uses native `/usr/bin/ssh`, strict host verification, BatchMode, no multiplexing,
+no proxy/local commands, bounded connection/alive checks and a 30-second deadline.
+Only JSON stdin carries event text. Its constant remote command is:
+
+```
+docker exec -i homeassistant python /config/_tools/belovodie_calendar_bridge/ha_ssh_receiver.py
+```
+
+The controller deploys that adapter inside the Home Assistant container separately.
+The receiver reads one bounded snapshot, rejects invalid/duplicate JSON roots and
+versions, then POSTs `{"snapshot": ...}` to the fixed native service
+`belovodie_calendar_bridge.publish`; that service validates the complete contract
+before state mutation. The receiver resolves `(url, token)` only through HA-local
+`/config/_tools/ai_ollama/common.py:_get_ha_config`. No HA token is copied to the Mac.
+Process output is discarded, and the receiver prints only generic success/failure.
+No titles, identifiers, credentials or response state attributes enter logs.
+
+The source tests use fake calendars, private temporary files and local child
+processes. They do not prove actual signed-app visibility, Calendar/cloud behavior,
+launchd/menu settings handoff or SSH-to-HA delivery. Those gates require the
+controller's stable signing, launchd start/stop/restart and initial provider checks.

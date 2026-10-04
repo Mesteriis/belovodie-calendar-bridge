@@ -34,7 +34,22 @@ public struct CalendarSettingsView: View {
             if let date = model.lastSuccessfulRead {
                 Text("Последнее полное локальное чтение: \(date.formatted(date: .numeric, time: .standard))").font(.caption)
             }
-            Text("Автоматическая запись выключена. План показывает только количества.").font(.caption).foregroundStyle(.secondary)
+            Divider()
+            HStack {
+                Button("Передать снимок в HA сейчас") { model.syncNow() }
+                Text(model.coordinator?.status ?? "Фоновый режим недоступен").font(.caption)
+            }
+            if let date = model.coordinator?.lastSuccessfulSync {
+                Text("Последняя успешная передача: \(date.formatted(date: .numeric, time: .standard))").font(.caption)
+            }
+            Text("Запись блоков: \(model.coordinator?.writesEnabled == true ? "ВКЛ" : "ВЫКЛ")").font(.caption)
+            HStack {
+                Button("Проверить активный план записи") { model.prepareWriteReview() }
+                Button("Начальная проверка завершена — включить запись") { model.enableWrites() }.disabled(!model.canEnableWrites)
+                Button("Выключить запись") { model.disableWrites() }
+            }.disabled(model.coordinator?.running == true)
+            Text(model.writeReviewSummary).font(.caption)
+            Text("Включайте запись только после проверки реальных провайдеров. Изменение настроек выключает запись.").font(.caption).foregroundStyle(.secondary)
         }
         .padding(20)
         .frame(minWidth: 1000, minHeight: 520)

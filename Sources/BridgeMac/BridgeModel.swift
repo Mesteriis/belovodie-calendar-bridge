@@ -1,9 +1,11 @@
 import Foundation
 import Observation
 import BridgeCore
+import EventKit
+import AppKit
 
 @Observable @MainActor public final class BridgeModel {
-    /// Draft UI edits are never the configuration consumed by a future background runner.
+    /// Draft UI edits are never the configuration consumed by the background runner.
     public var settings: BridgeSettings?
     public private(set) var activeSettings: BridgeSettings?
     private var reviewedSettings: BridgeSettings?
@@ -16,6 +18,11 @@ import BridgeCore
     public private(set) var dryRunSummary = "План ещё не рассчитан"
     public private(set) var reading = false
     public var onlySelected = false
+    public private(set) var coordinator: SyncCoordinator?
+    public private(set) var canEnableWrites = false
+    public private(set) var writeReviewSummary = "План для включения записи ещё не проверен"
+    private var eventObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
     private let settingsStore: SettingsStore
     private var adapter: EventKitAdapter?
     public init(directoryURL: URL? = nil, provider: (any CalendarProvider)? = nil) {
@@ -27,13 +34,52 @@ import BridgeCore
             activeSettings = loaded
             adapter = EventKitAdapter(provider: provider ?? NativeEventKitProvider(), installationID: loaded.installationID,
                 receipts: try OwnershipReceiptStore(directoryURL: directory, installationID: loaded.installationID))
+            let transport: any SnapshotTransport
+            if let config = try? SSHConfiguration.load(directoryURL: directory) { transport = SSHTransport(configuration: config) } else { transport = UnconfiguredTransport() }
+            coordinator = SyncCoordinator(adapter: adapter!, settings: loaded, directoryURL: directory, transport: transport)
             access = adapter!.access
-            status = "Настройки загружены. Чтение запускается вручную."
+            status = "Настройки загружены. Запись требует отдельного включения."
         } catch {
             settings = nil
             activeSettings = nil
             status = "Не удалось загрузить приватные настройки. Чтение заблокировано."
         }
+    }
+    public func startBackground() {
+        guard let coordinator, eventObserver == nil else { return }
+        eventObserver = NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: nil, queue: .main) { [weak coordinator] _ in
+            Task { @MainActor in coordinator?.requestSync(reason: .eventChanged) }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak coordinator] _ in
+            Task { @MainActor in coordinator?.requestSync(reason: .wake) }
+        }
+        coordinator.start()
+    }
+    public func stopBackground() {
+        coordinator?.stop()
+        if let eventObserver { NotificationCenter.default.removeObserver(eventObserver) }
+        if let wakeObserver { NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver) }
+        eventObserver = nil; wakeObserver = nil
+    }
+    public func syncNow() { coordinator?.requestSync(reason: .manual) }
+    public func prepareWriteReview() {
+        canEnableWrites = false
+        guard settings == activeSettings, let coordinator else { status = "Примените проверенный черновик перед включением записи."; return }
+        do {
+            let plan = try coordinator.previewInitialPlan()
+            writeReviewSummary = "Активный план: создать \(plan.creates.count), изменить \(plan.updates.count), удалить \(plan.deletes.count)."
+            canEnableWrites = true
+        } catch { writeReviewSummary = "Полное чтение активного плана не подтверждено. Запись не включена." }
+    }
+    public func enableWrites() {
+        guard canEnableWrites, settings == activeSettings else { return }
+        do { try coordinator?.enableReviewedWrites(); canEnableWrites = false }
+        catch { canEnableWrites = false; writeReviewSummary = "План изменился. Повторите проверку перед включением записи." }
+    }
+    public func disableWrites() {
+        canEnableWrites = false
+        do { try coordinator?.disableWrites() }
+        catch { status = "Запись выключена в этом процессе; не удалось сохранить отключение. Не перезапускайте до исправления приватного файла." }
     }
     public func requestAccess() async {
         guard let adapter, !reading else { return }
@@ -56,6 +102,7 @@ import BridgeCore
             try settingsStore.save(activeSettings)
             self.settings = settings
             self.activeSettings = activeSettings
+            try coordinator?.updateSettings(activeSettings)
             reviewedSettings = nil
             status = "Локальный список прочитан. Выберите нужные флажки."
         } catch { status = "Не удалось прочитать список. Сохранённый выбор сохранён." }
@@ -63,6 +110,7 @@ import BridgeCore
     }
     public func invalidatePreview() {
         reviewedSettings = nil
+        disableWrites()
         dryRunSummary = "Настройки изменились. Рассчитайте план заново."
     }
     public func applyReviewedSettings() {
@@ -71,7 +119,9 @@ import BridgeCore
             return
         }
         do {
+            disableWrites()
             try settingsStore.save(settings)
+            try coordinator?.updateSettings(settings)
             activeSettings = settings
             status = "Проверенные настройки применены. Автоматическая запись выключена."
         } catch { status = "Не удалось сохранить настройки. Активные настройки сохранены без изменений." }

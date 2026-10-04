@@ -9,7 +9,7 @@ let package = Package(
     targets: [
         .target(name: "BridgeCore"),
         .target(name: "BridgeMac", dependencies: ["BridgeCore"], exclude: ["App.swift"]),
-        .executableTarget(name: "BridgeApp", dependencies: ["BridgeMac"], path: "Sources/BridgeMac", exclude: ["EventKitAdapter.swift", "NativeEventKitProvider.swift", "BridgeModel.swift", "CalendarSettingsView.swift", "OwnershipReceiptStore.swift"], sources: ["App.swift"]),
+        .executableTarget(name: "BridgeApp", dependencies: ["BridgeMac"], path: "Sources/BridgeMac", exclude: ["EventKitAdapter.swift", "NativeEventKitProvider.swift", "BridgeModel.swift", "CalendarSettingsView.swift", "OwnershipReceiptStore.swift", "SyncCoordinator.swift", "SSHTransport.swift", "ProcessOwnership.swift"], sources: ["App.swift"]),
         .testTarget(name: "BridgeCoreTests", dependencies: ["BridgeCore", "BridgeMac"])
     ]
 )
