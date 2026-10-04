@@ -1,0 +1,10 @@
+publish:
+  name: Publish calendar snapshot
+  description: Publish a validated Snapshot v1 using administrator authentication. Failed sources retain their last successful events and exported window.
+  fields:
+    snapshot:
+      name: Snapshot
+      description: The complete Snapshot v1 JSON object produced by the native Mac bridge.
+      required: true
+      selector:
+        object:

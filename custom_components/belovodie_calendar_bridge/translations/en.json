@@ -1,0 +1,27 @@
+{
+  "title": "Belovodie Calendar Bridge",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Calendar snapshot receiver",
+        "description": "Create a read-only receiver for selected original calendars. Publish Snapshot v1 using the authenticated admin service belovodie_calendar_bridge.publish. Last successful snapshots remain available through source failures; stale and exported-window attributes show their coverage."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only one calendar snapshot receiver is allowed.",
+      "already_configured": "The calendar snapshot receiver is already configured."
+    }
+  },
+  "services": {
+    "publish": {
+      "name": "Publish calendar snapshot",
+      "description": "Publish a validated Snapshot v1 using administrator authentication. Failed sources retain their last successful events and exported window.",
+      "fields": {
+        "snapshot": {
+          "name": "Snapshot",
+          "description": "The complete Snapshot v1 JSON object produced by the native Mac bridge."
+        }
+      }
+    }
+  }
+}
