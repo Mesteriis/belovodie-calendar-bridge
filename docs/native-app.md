@@ -2,7 +2,13 @@
 
 Build the macOS 14+ Swift 6 app with `./scripts/build-app.sh`. It invokes SwiftPM,
 stages `build/BelovodieCalendarBridge.app`, includes the full Calendar access usage
-string, signs, lints the plist and verifies the signature. The default signature
+string, signs with hardened runtime and the Calendar entitlement, lints the plist,
+verifies the signature, and reads the actual signed Calendar entitlement. Both ad-hoc
+and private development signing use `packaging/Entitlements.plist`, which requests only
+`com.apple.security.personal-information.calendars=true`. [Apple documents this entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.security.personal-information.calendars)
+for Calendar access under hardened runtime. It declares the app's requested scope;
+the user must still approve macOS Calendar access. Manual re-signing must preserve
+`--options runtime --entitlements packaging/Entitlements.plist`. The default signature
 is ad-hoc for build/CI checks. For stable local privacy approval, supply the same
 private Apple Development identity in `CODE_SIGN_IDENTITY`; never commit identity
 or account details. Developer ID distribution/notarization is outside this stage.

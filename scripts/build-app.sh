@@ -12,10 +12,18 @@ cp packaging/Info.plist "$BRIDGE_APP/Contents/Info.plist"
 chmod 755 "$BRIDGE_APP/Contents/MacOS/BelovodieCalendarBridge"
 # Identity is a private environment input. Ad-hoc is suitable for build/CI verification;
 # use the same private Apple Development identity across local TCC launches.
-if ! codesign --force --sign "${CODE_SIGN_IDENTITY:--}" "$BRIDGE_APP" >/dev/null 2>&1; then
+if ! codesign --force --options runtime --entitlements packaging/Entitlements.plist --sign "${CODE_SIGN_IDENTITY:--}" "$BRIDGE_APP" >/dev/null 2>&1; then
     printf 'Signing failed. Check the private CODE_SIGN_IDENTITY configuration.\n' >&2
     exit 1
 fi
 plutil -lint "$BRIDGE_APP/Contents/Info.plist"
 codesign --verify --strict "$BRIDGE_APP"
+BRIDGE_SIGNED_ENTITLEMENTS="$BRIDGE_ROOT/build/verified-entitlements.plist"
+codesign -d --entitlements :- "$BRIDGE_APP" > "$BRIDGE_SIGNED_ENTITLEMENTS" 2>/dev/null
+BRIDGE_CALENDAR_ACCESS="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.personal-information.calendars' "$BRIDGE_SIGNED_ENTITLEMENTS")"
+if [[ "$BRIDGE_CALENDAR_ACCESS" != true ]]; then
+    printf 'Signed bundle lacks the required Calendar entitlement.\n' >&2
+    exit 1
+fi
+printf 'Signed Calendar entitlement verified; hardened runtime enabled.\n'
 printf 'Built %s\n' "$BRIDGE_APP"
