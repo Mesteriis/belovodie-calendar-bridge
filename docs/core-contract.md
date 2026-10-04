@@ -137,3 +137,12 @@ Symlinks, special files and hard-linked destination files are rejected. Existing
 directory/file modes are tightened when accessed. Callers serialize store access;
 this is not a multi-process lock or provider transaction journal. No file values
 are logged. Actual EventKit/HA credentials and host bindings stay outside Git.
+
+## Native foreground boundary
+
+The macOS adapter and settings utility are documented in `docs/native-app.md`.
+`BridgeSettings` v1 additionally persists `lookbackDays` and `lookaheadDays`; older
+files default to 7/90. Bounds are 0–365 back and 1–365 ahead. Invalid values are
+rejected without replacing existing settings. `BridgeModel.settings` is a UI draft;
+`activeSettings` changes only after a matching count-only preview and successful
+atomic save. Native event writes remain inaccessible from the foreground UI.

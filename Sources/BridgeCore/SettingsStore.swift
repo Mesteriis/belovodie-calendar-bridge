@@ -4,10 +4,23 @@ public struct BridgeSettings: Codable, Equatable, Sendable {
     public let version: Int
     public let installationID: UUID
     public var policies: [CalendarPolicy]
-    public init(installationID: UUID = UUID(), policies: [CalendarPolicy] = []) {
+    public var lookbackDays: Int
+    public var lookaheadDays: Int
+    public init(installationID: UUID = UUID(), policies: [CalendarPolicy] = [], lookbackDays: Int = 7, lookaheadDays: Int = 90) {
         version = 1
         self.installationID = installationID
         self.policies = policies
+        self.lookbackDays = lookbackDays
+        self.lookaheadDays = lookaheadDays
+    }
+    private enum CodingKeys: String, CodingKey { case version, installationID, policies, lookbackDays, lookaheadDays }
+    public init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        installationID = try values.decode(UUID.self, forKey: .installationID)
+        policies = try values.decode([CalendarPolicy].self, forKey: .policies)
+        lookbackDays = try values.decodeIfPresent(Int.self, forKey: .lookbackDays) ?? 7
+        lookaheadDays = try values.decodeIfPresent(Int.self, forKey: .lookaheadDays) ?? 90
     }
     /// Missing inventory entries remain selected: absence is not a confirmed disable/removal.
     public mutating func discover(_ inventory: [CalendarDescriptor]) {
@@ -20,7 +33,7 @@ public struct BridgeSettings: Codable, Equatable, Sendable {
         }
     }
 }
-public enum SettingsStoreError: Error, Equatable { case unsupportedVersion, duplicatePolicy }
+public enum SettingsStoreError: Error, Equatable { case unsupportedVersion, duplicatePolicy, invalidQueryWindow }
 public struct SettingsStore: Sendable {
     public let directoryURL: URL
     public init(directoryURL: URL) { self.directoryURL = directoryURL }
@@ -44,6 +57,7 @@ public struct SettingsStore: Sendable {
     }
     private func validate(_ settings: BridgeSettings) throws {
         guard settings.version == 1 else { throw SettingsStoreError.unsupportedVersion }
+        guard (0...365).contains(settings.lookbackDays), (1...365).contains(settings.lookaheadDays) else { throw SettingsStoreError.invalidQueryWindow }
         guard Set(settings.policies.map(\.identity)).count == settings.policies.count else { throw SettingsStoreError.duplicatePolicy }
     }
 }

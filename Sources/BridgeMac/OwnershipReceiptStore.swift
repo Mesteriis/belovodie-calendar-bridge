@@ -1,0 +1,67 @@
+import Foundation
+import BridgeCore
+
+/// Private provenance only: no titles, account names, URLs, or attendee data.
+/// A pending create survives commit-before-error and quarantines an uncertain target.
+@MainActor public final class OwnershipReceiptStore {
+    private struct Receipt: Codable, Equatable { let target: String; let rowID: String; let marker: String }
+    private struct Pending: Codable, Equatable { let target: String; let marker: String }
+    private struct State: Codable { let version: Int; let installationID: UUID; var receipts: [Receipt]; var pending: [Pending] }
+    var isPersistent: Bool { storage != nil }
+    private var state: State
+    private let storage: AtomicStore?
+    init(installationID: UUID) {
+        state = State(version: 1, installationID: installationID, receipts: [], pending: [])
+        storage = nil
+    }
+    public init(directoryURL: URL, installationID: UUID) throws {
+        let storage = AtomicStore(fileURL: directoryURL.appendingPathComponent("ownership-receipts.json"))
+        self.storage = storage
+        if let data = try storage.load() {
+            let loaded = try JSONDecoder().decode(State.self, from: data)
+            guard loaded.version == 1, loaded.installationID == installationID,
+                  loaded.receipts.allSatisfy({ Self.valid($0.marker, target: $0.target, installationID: installationID) }),
+                  loaded.pending.allSatisfy({ Self.valid($0.marker, target: $0.target, installationID: installationID) }) else { throw EventKitAdapterError.invalidOwnership }
+            state = loaded
+        } else { state = State(version: 1, installationID: installationID, receipts: [], pending: []) }
+    }
+    private static func valid(_ marker: String?, target: String, installationID: UUID) -> Bool {
+        guard let decoded = Ownership.decode(marker), decoded.installationID == installationID,
+              let expected = try? Ownership(installationID: installationID).encode(linkID: decoded.linkID, targetIdentity: target, sourceIdentities: [target]) else { return false }
+        return decoded.targetID == Ownership.decode(expected)?.targetID
+    }
+    func hasProvenance(target: String) -> Bool {
+        state.receipts.contains { $0.target == target } || state.pending.contains { $0.target == target }
+    }
+    func observe(_ rows: [ProviderEvent], target: String) throws {
+        // A known row is uncertain if its provider removes/changes ownership. Keep it out of
+        // source/export reads and never authorize repair by title or time alone.
+        for receipt in state.receipts where receipt.target == target {
+            if let row = rows.first(where: { $0.id == receipt.rowID }),
+               Ownership.decode(row.event.ownershipMarker) != Ownership.decode(receipt.marker) { throw EventKitAdapterError.invalidOwnership }
+        }
+        var updated = state
+        for row in rows where Self.valid(row.event.ownershipMarker, target: target, installationID: state.installationID) {
+            let receipt = Receipt(target: target, rowID: row.id, marker: row.event.ownershipMarker!)
+            updated.receipts.removeAll { $0.target == target && $0.rowID == row.id }
+            updated.receipts.append(receipt)
+        }
+        updated.pending.removeAll { pending in
+            pending.target == target && rows.contains { Ownership.decode($0.event.ownershipMarker) == Ownership.decode(pending.marker) }
+        }
+        try persist(updated)
+        guard !state.pending.contains(where: { $0.target == target }) else { throw EventKitAdapterError.incompleteRead }
+    }
+    func beginCreate(_ block: DesiredBlock) throws {
+        let target = CalendarPolicy.identity(sourceID: block.sourceID, calendarID: block.calendarID)
+        guard Self.valid(block.ownershipMarker, target: target, installationID: state.installationID) else { throw EventKitAdapterError.invalidOwnership }
+        var updated = state
+        let pending = Pending(target: target, marker: block.ownershipMarker)
+        if !updated.pending.contains(pending) { updated.pending.append(pending) }
+        try persist(updated)
+    }
+    private func persist(_ updated: State) throws {
+        if let storage { try storage.save(JSONEncoder().encode(updated)) }
+        state = updated
+    }
+}

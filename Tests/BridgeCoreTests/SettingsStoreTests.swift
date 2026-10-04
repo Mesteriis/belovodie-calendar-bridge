@@ -8,6 +8,20 @@ final class SettingsStoreTests: XCTestCase {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent("bridge-tests-\(UUID())", isDirectory: true)
     }
     override func tearDownWithError() throws { if FileManager.default.fileExists(atPath: directory.path) { try FileManager.default.removeItem(at: directory) } }
+    func testOldSettingsDecodeWindowDefaultsAndNewWindowPersists() throws {
+        let store = SettingsStore(directoryURL: directory)
+        var settings = try store.load()
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        old.removeValue(forKey: "lookbackDays"); old.removeValue(forKey: "lookaheadDays")
+        try AtomicStore(fileURL: directory.appendingPathComponent("settings.json")).save(JSONSerialization.data(withJSONObject: old))
+        settings = try store.load()
+        XCTAssertEqual(settings.lookbackDays, 7); XCTAssertEqual(settings.lookaheadDays, 90)
+        settings.lookbackDays = 14; settings.lookaheadDays = 120
+        try store.save(settings)
+        XCTAssertEqual(try store.load(), settings)
+        settings.lookaheadDays = 0
+        XCTAssertThrowsError(try store.save(settings))
+    }
     func descriptor(_ id: String, name: String) -> CalendarDescriptor {
         CalendarDescriptor(sourceID: "source", calendarID: id, name: name, owner: "Owner", timeZoneID: "Europe/Madrid", localRead: .missing)
     }
