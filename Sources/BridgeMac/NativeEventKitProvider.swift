@@ -53,8 +53,19 @@ struct NativeEventReadDates {
         }
     }
     public func requestAccess() async throws -> Bool {
-        do { return try await store.requestFullAccessToEvents() }
-        catch { throw EventKitAdapterError.permissionRequired }
+        try await Self.requestFullAccess { completion in
+            store.requestFullAccessToEvents(completion: completion)
+        }
+    }
+    /// Invoke the synchronous EventKit API on MainActor; only its result crosses
+    /// the callback boundary, never the actor-owned non-Sendable event store.
+    static func requestFullAccess(_ request: (@escaping @Sendable (Bool, (any Error)?) -> Void) -> Void) async throws -> Bool {
+        try await withCheckedThrowingContinuation { continuation in
+            request { granted, error in
+                if error != nil { continuation.resume(throwing: EventKitAdapterError.permissionRequired) }
+                else { continuation.resume(returning: granted) }
+            }
+        }
     }
     public func calendars() throws -> [ProviderCalendar] {
         guard access == .fullAccess else { throw EventKitAdapterError.permissionRequired }
