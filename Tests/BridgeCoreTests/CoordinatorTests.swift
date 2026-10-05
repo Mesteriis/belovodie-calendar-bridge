@@ -18,6 +18,69 @@ import XCTest
         return (coordinator, provider, clock, transport, directory, settings)
     }
     private func settle() async { for _ in 0..<20 { await Task.yield() } }
+    func testDisabledSourceChangeOrRemovalDoesNotBlockReceiptBasedTargetCleanup() async throws {
+        for removed in [false, true] {
+            let (sync, provider, clock, _, dir, initial) = try fixture()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            var settings = initial
+            settings.policies[0].exportToHA = false
+            try sync.updateSettings(settings)
+            _ = try sync.previewInitialPlan(); try sync.enableReviewedWrites()
+            sync.requestSync(reason: .manual); await settle()
+            XCTAssertEqual(provider.writes, 1)
+            XCTAssertEqual(provider.rows.filter { Ownership.decode($0.event.ownershipMarker) != nil }.count, 1)
+
+            // Both flags are off, but target B must still be read for its durable receipt.
+            settings.policies[0].busySource = false
+            settings.policies[1].busyTarget = false
+            try sync.updateSettings(settings)
+            if removed {
+                provider.inventory.removeAll { $0.descriptor.calendarID == "source" }
+                provider.rows.removeAll { $0.event.calendarID == "source" }
+            } else {
+                provider.rows[0] = ProviderEvent(id: "original", event: SourceEvent(sourceID: "account", calendarID: "source", eventID: "original", title: "Changed original", interval: EventInterval(start: Date(timeIntervalSince1970: 301), end: Date(timeIntervalSince1970: 401))))
+            }
+            let untouched = provider.rows.filter { Ownership.decode($0.event.ownershipMarker) == nil }
+            provider.eventQueries = [:]
+            let cleanup = try sync.previewInitialPlan()
+            XCTAssertEqual(cleanup.deletes.count, 1); XCTAssertTrue(cleanup.creates.isEmpty)
+            try sync.enableReviewedWrites()
+            sync.requestSync(reason: .manual); clock.advance(0); await settle()
+            XCTAssertFalse(sync.failed)
+            XCTAssertEqual(provider.writes, 2)
+            XCTAssertEqual(provider.rows, untouched)
+            XCTAssertEqual(provider.eventQueries[settings.policies[0].identity, default: 0], 0)
+            XCTAssertGreaterThan(provider.eventQueries[settings.policies[1].identity, default: 0], 0)
+            sync.stop()
+        }
+    }
+    func testForegroundDraftPreviewDoesNotContaminateActiveCoordinatorEvidence() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("foreground-evidence-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SettingsStore(directoryURL: directory)
+        var settings = try store.load()
+        settings.policies = [CalendarPolicy(sourceID: "account", calendarID: "source", owner: "Owner", label: "Source", busySource: true), CalendarPolicy(sourceID: "account", calendarID: "target", owner: "Owner", label: "Target", busyTarget: true), CalendarPolicy(sourceID: "account", calendarID: "draft", owner: "Owner", label: "Draft")]
+        try store.save(settings)
+        let provider = FakeCalendarProvider()
+        provider.inventory = settings.policies.map { ProviderCalendar(descriptor: CalendarDescriptor(sourceID: $0.sourceID, calendarID: $0.calendarID, name: $0.label, owner: $0.owner, timeZoneID: "UTC", localRead: .failed)) }
+        let start = Calendar.current.startOfDay(for: Date()).addingTimeInterval(3600)
+        provider.rows = [ProviderEvent(id: "original", event: SourceEvent(sourceID: "account", calendarID: "source", eventID: "original", title: "Fixture", interval: EventInterval(start: start, end: start.addingTimeInterval(3600))))]
+        let model = BridgeModel(directoryURL: directory, provider: provider)
+        model.settings?.policies[2].busySource = true
+        model.dryRun()
+        XCTAssertTrue(model.canApplySettings); XCTAssertEqual(provider.writes, 0)
+        provider.inventory.removeAll { $0.descriptor.calendarID == "draft" }
+        provider.eventQueries = [:]
+        let sync = try XCTUnwrap(model.coordinator)
+        _ = try sync.previewInitialPlan(); try sync.enableReviewedWrites()
+        sync.requestSync(reason: .manual); await settle()
+        // The intentionally unconfigured transport fails, but independent local reconciliation succeeds.
+        XCTAssertEqual(provider.writes, 1)
+        XCTAssertEqual(sync.reconciliationStatus, "План занятости применён")
+        XCTAssertEqual(provider.eventQueries[settings.policies[2].identity, default: 0], 0)
+        XCTAssertEqual(model.activeSettings, settings)
+        sync.stop()
+    }
     func testFiveSecondDebounceExportsWithoutWrites() async throws {
         let (sync, provider, clock, transport, dir, _) = try fixture(); defer { try? FileManager.default.removeItem(at: dir) }
         sync.requestSync(reason: .eventChanged); clock.advance(4); await settle()

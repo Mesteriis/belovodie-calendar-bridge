@@ -39,6 +39,21 @@ struct NativeEventReadDates {
     }
 }
 
+/// Shared create/update date configuration, testable with an unsaved EKEvent.
+@MainActor enum NativeEventWriteDates {
+    static func configure(_ event: EKEvent, interval: EventInterval, isAllDay: Bool, timedTimeZone: TimeZone = .current) {
+        // Reset before assigning dates: assigning an exclusive midnight end to an already
+        // all-day event can extend it by a day. Setting an explicit zone AFTER allDay=true
+        // instead clears the all-day flag. Floating zone + dates + final classification
+        // lets EventKit express its native inclusive end while the core stays half-open.
+        event.isAllDay = false
+        event.timeZone = isAllDay ? nil : timedTimeZone
+        event.startDate = interval.start
+        event.endDate = interval.end
+        event.isAllDay = isAllDay
+    }
+}
+
 /// Owns the only EKEventStore. It is created by the bundled app, never by a shell helper.
 @MainActor public final class NativeEventKitProvider: CalendarProvider {
     private let store = EKEventStore()
@@ -153,10 +168,7 @@ struct NativeEventReadDates {
         let event = try replacing.map(currentEvent) ?? EKEvent(eventStore: store)
         event.calendar = calendar
         event.title = "Занято"
-        event.startDate = block.interval.start
-        event.endDate = block.interval.end
-        event.isAllDay = block.isAllDay
-        event.timeZone = TimeZone.current
+        NativeEventWriteDates.configure(event, interval: block.interval, isAllDay: block.isAllDay)
         event.notes = block.ownershipMarker
         event.location = nil
         event.url = nil

@@ -39,7 +39,7 @@ public struct SourceReadResult {
     public let blocks: [ManagedBlock]
     public var complete: Bool { if case .complete = descriptor.localRead { return true }; return false }
 }
-/// Serial EventKit boundary. The foreground app never calls authorizeReviewedPlan/apply.
+/// Serial EventKit boundary. Foreground previews are read-only; the guarded coordinator owns writes.
 @MainActor public final class EventKitAdapter {
     let provider: any CalendarProvider
     let installationID: UUID
@@ -50,6 +50,12 @@ public struct SourceReadResult {
     public init(provider: any CalendarProvider, installationID: UUID, receipts: OwnershipReceiptStore? = nil) {
         self.provider = provider; self.installationID = installationID
         self.receipts = receipts ?? OwnershipReceiptStore(installationID: installationID)
+    }
+    /// Start a fresh read/plan transaction. Historical policies never authorize or block
+    /// this transaction; durable receipts independently retain required cleanup reads.
+    public func beginReadTransaction() {
+        completeReads.removeAll()
+        reviewedPlan = nil
     }
     public var access: CalendarAccess { provider.access }
     public func requestAccess() async throws -> Bool { try await provider.requestAccess() }
@@ -107,8 +113,9 @@ public struct SourceReadResult {
         try receipts.observe(unique, target: calendar.descriptor.identity)
         return unique
     }
-    /// Future callers must obtain explicit user review of this exact plan. Authorization is one-shot,
-    /// in-memory only, and cleared by every read. No setting or launch path enables writes.
+    /// The coordinator requires reviewed active settings and complete fresh evidence for this exact
+    /// plan. Adapter authorization is one-shot, in-memory, and cleared by each transaction/read.
+    /// Durable coordinator opt-in may survive restart; it never substitutes for these checks.
     public func authorizeReviewedPlan(_ plan: BusyPlan) throws {
         guard access == .fullAccess else { throw EventKitAdapterError.permissionRequired }
         guard !(provider is NativeEventKitProvider) || receipts.isPersistent else { throw EventKitAdapterError.writesDisabled }

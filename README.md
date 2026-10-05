@@ -32,6 +32,14 @@ and [boundary contract](docs/core-contract.md). The optional
 [Belovodie Calendar Card](https://github.com/Mesteriis/belovodie-calendar-card)
 is a separate package supporting day/week/month views and bounded snapshot status.
 
+## Version 0.1.2 (native build 3)
+
+This source prepares the next immutable release; publication is a separate step.
+It scopes write evidence to each fresh read/plan transaction and fixes native
+all-day create/update configuration. Durable pending receipts and exact ownership
+checks remain required. Unsaved EventKit regressions verify local classification
+and bounds; actual Google/iCloud all-day persistence still needs live acceptance.
+
 ## Source checks
 
 ```sh

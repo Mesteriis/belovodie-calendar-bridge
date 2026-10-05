@@ -23,7 +23,10 @@ Inventory discovery reads metadata only. Draft owner/label/flag/window edits rem
 separate from `BridgeModel.activeSettings`. Calculate the count-only plan before
 applying the exact reviewed draft. Discovery never persists partially edited flags.
 Only selected calendars or calendars with private ownership provenance have their
-events read. Missing saved choices remain present. Initial calendar selection is
+events read. Each foreground preview and coordinator read/plan transaction discards
+historical read evidence and one-shot authorization first; disabling a source without
+receipts stops querying it, while receipt-bearing targets remain readable for cleanup.
+Missing saved choices remain present. Initial calendar selection is
 manual after checking the actual source/calendar pair; names never define identity.
 
 The foreground draft preview remains count-only. The separate background mode below
@@ -58,6 +61,18 @@ subsecond ends are retained and still fail strict all-day snapshot validation.
 This canonicalizes the derived half-open interval without modifying provider
 originals; it never invents a fixed 24-hour day. Managed rows use the same conversion
 so pending receipts and exact replay compare canonical exclusive bounds.
+Writes use one shared native date configurator for both creates and updates.
+It resets all-day classification before dates, chooses a floating (`nil`) timezone
+for all-day blocks, assigns the canonical half-open bounds, then sets `isAllDay`
+last. Transient native construction reproduces why order matters: assigning an
+explicit zone after the all-day flag clears that flag, while assigning an exclusive
+end to an already-all-day event can add a day. EventKit expresses the configured
+all-day end as the last whole second before exclusive midnight; the existing read
+conversion recovers canonical bounds, including 23/25-hour and multiday spans.
+Timed writes keep explicit `TimeZone.current` and exact start/end values. These
+unsaved-object checks do not prove provider/cloud persistence; real all-day
+create/update/readback remains an operator acceptance gate. An existing uncertain
+pending create stays quarantined until its exact intended Busy row is observed.
 Strict snapshot midnight validation remains unchanged. Timed events preserve the explicit provider
 timezone where present, with the existing `TimeZone.current` fallback. Original
 recurrence identity uses the external series identifier

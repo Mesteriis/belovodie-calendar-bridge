@@ -132,6 +132,7 @@ import AppKit
         guard let adapter, let settings, !reading else { return }
         reading = true
         reviewedSettings = nil
+        adapter.beginReadTransaction()
         defer { reading = false; access = adapter.access }
         do {
             let today = Calendar.current.startOfDay(for: Date())

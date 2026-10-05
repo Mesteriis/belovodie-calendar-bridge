@@ -145,7 +145,13 @@ The macOS adapter and settings utility are documented in `docs/native-app.md`.
 files default to 7/90. Bounds are 0–365 back and 1–365 ahead. Invalid values are
 rejected without replacing existing settings. `BridgeModel.settings` is a UI draft;
 `activeSettings` changes only after a matching count-only preview and successful
-atomic save. Native event writes remain inaccessible from the foreground UI.
+atomic save. Foreground draft previews never mutate events. The settings UI separately
+reviews the active count-only plan and enables the guarded coordinator for those
+exact settings. Matching durable opt-in can restore on restart; every apply still
+requires fresh transaction-scoped complete reads, unchanged originals, current
+ownership/target checks and one-shot adapter authorization. A new foreground
+preview or coordinator read transaction clears previous evidence and authorization.
+Receipt-based cleanup reads remain required even when all target flags are off.
 
 Managed blocks carry observed `availability`; missing legacy values decode as unknown.
 Only Busy availability satisfies the desired block or protected boundary coverage;

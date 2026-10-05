@@ -77,6 +77,21 @@ import XCTest
         try adapter.authorizeReviewedPlan(plan); try adapter.apply(plan)
         XCTAssertEqual(fake.writes, 1); XCTAssertEqual(fake.rows.last?.event.title, "Занято")
     }
+    func testNewReadTransactionRevokesAuthorizationAndRequiresFreshTargetEvidence() throws {
+        let (fake, adapter, plan) = try fixture()
+        try adapter.authorizeReviewedPlan(plan)
+        adapter.beginReadTransaction()
+        XCTAssertThrowsError(try adapter.apply(plan)) { error in
+            XCTAssertEqual(error as? EventKitAdapterError, .writesDisabled)
+        }
+        try adapter.authorizeReviewedPlan(plan)
+        XCTAssertThrowsError(try adapter.apply(plan))
+        XCTAssertEqual(fake.writes, 0)
+        let policies = [policy("source", source: true), policy("target", target: true)]
+        _ = try policies.map { try adapter.read(policy: $0, window: window) }
+        try adapter.authorizeReviewedPlan(plan); try adapter.apply(plan)
+        XCTAssertEqual(fake.writes, 1)
+    }
     func testReadOnlyAndUnsupportedBusyTargetsRejectWrites() throws {
         for busySupported in [true, false] {
             let (fake, adapter, plan) = try fixture()
@@ -329,9 +344,11 @@ import XCTest
     var failWriteAfterPersist = false
     var failWriteBeforePersist = false
     var writes = 0
+    var eventQueries: [String: Int] = [:]
     func requestAccess() async throws -> Bool { access == .fullAccess }
     func calendars() throws -> [ProviderCalendar] { inventory }
     func events(calendar: ProviderCalendar, window: QueryWindow) throws -> [ProviderEvent] {
+        eventQueries[calendar.descriptor.identity, default: 0] += 1
         if failRead { throw EventKitAdapterError.incompleteRead }
         if revokeDuringRead { access = .denied }
         return rows.filter { $0.event.calendarIdentity == calendar.descriptor.identity && $0.event.interval.start < window.end && $0.event.interval.end > window.start }

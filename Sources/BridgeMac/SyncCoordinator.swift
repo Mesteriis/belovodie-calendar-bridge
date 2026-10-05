@@ -180,6 +180,7 @@ private struct WriteIntent: Codable {
     }
     private typealias ReadSlice = (reads: [SourceReadResult], window: QueryWindow)
     private func readSlice() throws -> ReadSlice {
+        adapter.beginReadTransaction()
         guard adapter.access == .fullAccess else { throw EventKitAdapterError.permissionRequired }
         let calendar = Calendar.current; let today = calendar.startOfDay(for: clock.now)
         guard let start = calendar.date(byAdding: .day, value: -settings.lookbackDays, to: today),
