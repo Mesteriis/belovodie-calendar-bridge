@@ -34,7 +34,10 @@ provider additionally requires durable receipts. Creates/updates precede deletes
 each provider operation commits separately and retries are idempotent. Blocks use
 only `Занято`, absolute bounds, all-day state, Busy availability and opaque notes;
 location, URL, alarms and recurrence rules are cleared, and attendee-bearing or
-recurring existing rows are never mutated.
+recurring existing rows are never mutated. Providers can subsequently add their own
+default reminders or send calendar-level email notifications; clearing EventKit
+alarms does not guarantee reminder suppression. Verify those target-provider
+settings before enabling automatic writes.
 
 EventKit reports local calendar data, not remote authentication/synchronization
 health. The app always labels Google/iCloud health unknown. A successful synchronous

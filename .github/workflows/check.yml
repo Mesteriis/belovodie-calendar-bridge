@@ -1,0 +1,45 @@
+name: Source checks
+on:
+  push:
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Core and native adapter regressions
+        run: swift test
+      - name: Receiver, installer and release package regressions
+        run: python -m unittest discover -s Tests -p 'test_*.py'
+      - name: Build and verify ad-hoc app
+        env:
+          CODE_SIGN_IDENTITY: '-'
+        run: ./scripts/build-app.sh
+      - name: Package generic HA integration
+        run: python scripts/package-integration.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integration-package
+          path: |
+            build/belovodie-calendar-bridge-*.zip
+            build/belovodie-calendar-bridge-*.zip.sha256
+          if-no-files-found: error
+  home-assistant:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Isolated native HA test dependencies
+        run: python -m pip install homeassistant==2026.9.4 pytest==8.4.2
+      - name: Native receiver regressions with synthetic calendars
+        env:
+          PYTHONPATH: .
+        run: python -m pytest -q Tests/ha

@@ -1,0 +1,28 @@
+name: Integration release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  checks:
+    uses: ./.github/workflows/check.yml
+  release:
+    needs: checks
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Validate tag and package reviewed integration tree
+        env:
+          BRIDGE_TAG: ${{ github.ref_name }}
+        run: python scripts/package-integration.py --expected-version "${BRIDGE_TAG#v}"
+      - name: Publish integration archive and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRIDGE_TAG: ${{ github.ref_name }}
+        run: gh release create "$BRIDGE_TAG" --verify-tag --title "Belovodie Calendar Bridge $BRIDGE_TAG" --generate-notes build/belovodie-calendar-bridge-*.zip build/belovodie-calendar-bridge-*.zip.sha256

@@ -50,6 +50,25 @@ import XCTest
         var settings = BridgeSettings(); settings.discover(try EventKitAdapter(provider: fake, installationID: installation).inventory())
         XCTAssertEqual(settings.policies.count, 1); XCTAssertFalse(settings.policies.contains { $0.exportToHA || $0.busySource || $0.busyTarget })
     }
+    func testSavedPolicyIsUnverifiedUntilSuccessfulInventoryConfirmsAbsence() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("inventory-state-test-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SettingsStore(directoryURL: directory)
+        var saved = try store.load()
+        let selected = policy("saved", source: true)
+        saved.policies = [selected]
+        try store.save(saved)
+        let fake = FakeCalendarProvider()
+        let model = BridgeModel(directoryURL: directory, provider: fake)
+        XCTAssertEqual(model.localHealth(selected), "Список ещё не проверен")
+        XCTAssertEqual(model.settings, saved)
+        XCTAssertEqual(model.activeSettings, saved)
+        XCTAssertFalse(model.coordinator?.writesEnabled ?? true)
+        model.refreshInventory()
+        XCTAssertEqual(model.localHealth(selected), "Отсутствует локально")
+        XCTAssertEqual(model.settings?.policies, [selected])
+        XCTAssertEqual(fake.writes, 0)
+    }
     func testWritesRequireExplicitPlanAuthorizationAndAreIdempotent() throws {
         let (fake, adapter, plan) = try fixture()
         XCTAssertEqual(plan.creates.count, 1)

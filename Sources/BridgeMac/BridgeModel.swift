@@ -12,6 +12,7 @@ import AppKit
     public var canApplySettings: Bool { reviewedSettings != nil && reviewedSettings == settings }
     public private(set) var targetCapabilities: [String: TargetCapability] = [:]
     public private(set) var inventory: [CalendarDescriptor] = []
+    private var inventoryObserved = false
     public private(set) var access: CalendarAccess = .notDetermined
     public private(set) var status = "Доступ ещё не проверен"
     public private(set) var lastSuccessfulRead: Date?
@@ -96,6 +97,7 @@ import AppKit
         defer { reading = false; access = adapter.access }
         do {
             inventory = try adapter.inventory()
+            inventoryObserved = true
             targetCapabilities = adapter.targetCapabilities
             settings.discover(inventory)
             activeSettings.discover(inventory)
@@ -169,6 +171,7 @@ import AppKit
         switch inventory.first(where: { $0.identity == policy.identity })?.localRead {
         case .complete: return "Локально прочитан"
         case .failed: return "Чтение не подтверждено"
+        case nil where !inventoryObserved: return "Список ещё не проверен"
         default: return "Отсутствует локально"
         }
     }
